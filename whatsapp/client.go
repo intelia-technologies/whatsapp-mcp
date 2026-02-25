@@ -278,6 +278,8 @@ func (c *Client) SendTextMessage(ctx context.Context, chatJID string, text strin
 	// Persist protobuf for retry receipt handling across restarts
 	if protoBytes, err := proto.Marshal(msg); err == nil {
 		c.store.SaveMessageProto(resp.ID, protoBytes)
+	} else {
+		c.log.Warnf("Failed to marshal message proto for %s: %v", resp.ID, err)
 	}
 
 	return nil
@@ -530,11 +532,14 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 		Timestamp:   sendResp.Timestamp,
 		IsFromMe:    true,
 		MessageType: msgType,
+		ReplyToID:   replyToID,
 	})
 
 	// Persist protobuf for retry receipt handling across restarts
 	if protoBytes, err := proto.Marshal(msg); err == nil {
 		c.store.SaveMessageProto(sendResp.ID, protoBytes)
+	} else {
+		c.log.Warnf("Failed to marshal message proto for %s: %v", sendResp.ID, err)
 	}
 
 	return nil
@@ -615,11 +620,14 @@ func (c *Client) SendVideoMessage(ctx context.Context, chatJID string, videoSour
 		Timestamp:   sendResp.Timestamp,
 		IsFromMe:    true,
 		MessageType: "video",
+		ReplyToID:   replyToID,
 	})
 
 	// Persist protobuf for retry receipt handling across restarts
 	if protoBytes, err := proto.Marshal(msg); err == nil {
 		c.store.SaveMessageProto(sendResp.ID, protoBytes)
+	} else {
+		c.log.Warnf("Failed to marshal message proto for %s: %v", sendResp.ID, err)
 	}
 
 	return nil

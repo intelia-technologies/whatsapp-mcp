@@ -40,9 +40,17 @@ func NewMessageStore(db *sql.DB) *MessageStore {
 // SaveMessage saves a WhatsApp message to the database.
 func (s *MessageStore) SaveMessage(msg Message) error {
 	query := `
-	INSERT OR REPLACE INTO messages
+	INSERT INTO messages
 	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type, reply_to_id)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		chat_jid = excluded.chat_jid,
+		sender_jid = excluded.sender_jid,
+		text = excluded.text,
+		timestamp = excluded.timestamp,
+		is_from_me = excluded.is_from_me,
+		message_type = excluded.message_type,
+		reply_to_id = excluded.reply_to_id
 	`
 
 	// Use nil for empty reply_to_id
@@ -82,9 +90,17 @@ func (s *MessageStore) SaveBulk(messages []Message) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-	INSERT OR REPLACE INTO messages
+	INSERT INTO messages
 	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type, reply_to_id)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		chat_jid = excluded.chat_jid,
+		sender_jid = excluded.sender_jid,
+		text = excluded.text,
+		timestamp = excluded.timestamp,
+		is_from_me = excluded.is_from_me,
+		message_type = excluded.message_type,
+		reply_to_id = excluded.reply_to_id
 	`)
 	if err != nil {
 		return err
