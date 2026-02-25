@@ -114,4 +114,18 @@ func (m *MCPServer) registerTools() {
 		),
 		m.handleGetMyInfo,
 	)
+
+	// 8. download_media: force download skipped/failed media
+	m.server.AddTool(
+		mcp.NewTool("download_media",
+			mcp.WithDescription("Force download media files that were previously skipped or failed. If message_id is provided, downloads that specific file. Otherwise lists and downloads all skipped/failed media."),
+			mcp.WithString("message_id",
+				mcp.Description("specific message ID to download media for (optional — if omitted, downloads all skipped/failed)"),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("maximum number of skipped files to download (default: 10, max: 50)"),
+			),
+		),
+		m.handleDownloadMedia,
+	)
 }
