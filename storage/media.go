@@ -319,6 +319,93 @@ func (s *MediaStore) GetMediaByChat(chatJID string, limit int) ([]MediaMetadata,
 	return results, rows.Err()
 }
 
+// GetSkippedMedia returns all media with "skipped" or "failed" status that could be retried.
+func (s *MediaStore) GetSkippedMedia(limit int) ([]MediaMetadata, error) {
+	query := `
+	SELECT message_id, file_path, file_name, file_size, mime_type, width, height, duration,
+	       media_key, direct_path, file_sha256, file_enc_sha256,
+	       download_status, download_timestamp, download_error, created_at
+	FROM media_metadata
+	WHERE download_status IN ('skipped', 'failed')
+	AND length(media_key) > 0 AND length(direct_path) > 0
+	ORDER BY created_at DESC
+	LIMIT ?
+	`
+
+	rows, err := s.db.Query(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []MediaMetadata
+	for rows.Next() {
+		var meta MediaMetadata
+		var filePath sql.NullString
+		var width, height, duration sql.NullInt64
+		var mediaKey, fileSHA256, fileEncSHA256 []byte
+		var directPath, downloadError sql.NullString
+		var downloadTimestampUnix sql.NullInt64
+		var createdAtStr string
+
+		err := rows.Scan(
+			&meta.MessageID,
+			&filePath,
+			&meta.FileName,
+			&meta.FileSize,
+			&meta.MimeType,
+			&width,
+			&height,
+			&duration,
+			&mediaKey,
+			&directPath,
+			&fileSHA256,
+			&fileEncSHA256,
+			&meta.DownloadStatus,
+			&downloadTimestampUnix,
+			&downloadError,
+			&createdAtStr,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if filePath.Valid {
+			meta.FilePath = filePath.String
+		}
+		if width.Valid {
+			w := int(width.Int64)
+			meta.Width = &w
+		}
+		if height.Valid {
+			h := int(height.Int64)
+			meta.Height = &h
+		}
+		if duration.Valid {
+			d := int(duration.Int64)
+			meta.Duration = &d
+		}
+		if directPath.Valid {
+			meta.DirectPath = directPath.String
+		}
+		if downloadError.Valid {
+			meta.DownloadError = downloadError.String
+		}
+		if downloadTimestampUnix.Valid {
+			ts := time.Unix(downloadTimestampUnix.Int64, 0)
+			meta.DownloadTimestamp = &ts
+		}
+		meta.MediaKey = mediaKey
+		meta.FileSHA256 = fileSHA256
+		meta.FileEncSHA256 = fileEncSHA256
+		meta.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
+
+		results = append(results, meta)
+	}
+
+	return results, rows.Err()
+}
+
 // DeleteMediaMetadata removes metadata from the database.
 // File deletion must be handled separately.
 func (s *MediaStore) DeleteMediaMetadata(messageID string) error {
