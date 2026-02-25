@@ -15,6 +15,7 @@ type Message struct {
 	Timestamp   time.Time
 	IsFromMe    bool
 	MessageType string
+	ReplyToID   string // ID of the message this is replying to or reacting to (optional)
 }
 
 // MessageWithNames represents a message with sender and chat names from the database view.
@@ -39,10 +40,24 @@ func NewMessageStore(db *sql.DB) *MessageStore {
 // SaveMessage saves a WhatsApp message to the database.
 func (s *MessageStore) SaveMessage(msg Message) error {
 	query := `
-	INSERT OR REPLACE INTO messages
-	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO messages
+	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type, reply_to_id)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		chat_jid = excluded.chat_jid,
+		sender_jid = excluded.sender_jid,
+		text = excluded.text,
+		timestamp = excluded.timestamp,
+		is_from_me = excluded.is_from_me,
+		message_type = excluded.message_type,
+		reply_to_id = excluded.reply_to_id
 	`
+
+	// Use nil for empty reply_to_id
+	var replyToID interface{}
+	if msg.ReplyToID != "" {
+		replyToID = msg.ReplyToID
+	}
 
 	_, err := s.db.Exec(
 		query,
@@ -53,6 +68,7 @@ func (s *MessageStore) SaveMessage(msg Message) error {
 		msg.Timestamp.Unix(),
 		msg.IsFromMe,
 		msg.MessageType,
+		replyToID,
 	)
 
 	if err != nil {
@@ -74,9 +90,17 @@ func (s *MessageStore) SaveBulk(messages []Message) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-	INSERT OR REPLACE INTO messages
-	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
+	INSERT INTO messages
+	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type, reply_to_id)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		chat_jid = excluded.chat_jid,
+		sender_jid = excluded.sender_jid,
+		text = excluded.text,
+		timestamp = excluded.timestamp,
+		is_from_me = excluded.is_from_me,
+		message_type = excluded.message_type,
+		reply_to_id = excluded.reply_to_id
 	`)
 	if err != nil {
 		return err
@@ -85,6 +109,12 @@ func (s *MessageStore) SaveBulk(messages []Message) error {
 	defer stmt.Close()
 
 	for _, msg := range messages {
+		// Use nil for empty reply_to_id
+		var replyToID interface{}
+		if msg.ReplyToID != "" {
+			replyToID = msg.ReplyToID
+		}
+
 		_, err := stmt.Exec(
 			msg.ID,
 			msg.ChatJID,
@@ -93,6 +123,7 @@ func (s *MessageStore) SaveBulk(messages []Message) error {
 			msg.Timestamp.Unix(),
 			msg.IsFromMe,
 			msg.MessageType,
+			replyToID,
 		)
 
 		if err != nil {
@@ -290,6 +321,33 @@ func (s *MessageStore) GetChatMessagesWithNamesFiltered(
 	defer rows.Close()
 
 	return s.scanMessagesWithNames(rows)
+}
+
+// SaveMessageProto stores the serialized protobuf for a sent message.
+// This is used for retry receipt handling when the recipient can't decrypt.
+func (s *MessageStore) SaveMessageProto(messageID string, protoBytes []byte) error {
+	_, err := s.db.Exec(
+		"UPDATE messages SET message_proto = ? WHERE id = ?",
+		protoBytes, messageID,
+	)
+	return err
+}
+
+// GetMessageProto retrieves the serialized protobuf for a message.
+// Returns nil if the message or proto is not found.
+func (s *MessageStore) GetMessageProto(messageID string) ([]byte, error) {
+	var protoBytes []byte
+	err := s.db.QueryRow(
+		"SELECT message_proto FROM messages WHERE id = ?",
+		messageID,
+	).Scan(&protoBytes)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return protoBytes, nil
 }
 
 // scanMessages converts SQL rows into Message objects.
