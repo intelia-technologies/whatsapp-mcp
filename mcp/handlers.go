@@ -440,6 +440,65 @@ func (m *MCPServer) handleSendMessage(ctx context.Context, request mcp.CallToolR
 	return mcp.NewToolResultText(fmt.Sprintf("Message sent successfully to %s", chatJID)), nil
 }
 
+// handleSendImage handles the send_image tool request.
+func (m *MCPServer) handleSendImage(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	chatJID, err := request.RequireString("chat_jid")
+	if err != nil {
+		return mcp.NewToolResultError("chat_jid parameter is required"), nil
+	}
+
+	imageURL, err := request.RequireString("image_url")
+	if err != nil {
+		return mcp.NewToolResultError("image_url parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	caption := request.GetString("caption", "")
+	replyTo := request.GetString("reply_to", "")
+
+	err = m.wa.SendImageMessage(ctx, chatJID, imageURL, caption, replyTo)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to send image: %v", err)), nil
+	}
+
+	mediaType := "Image"
+	if strings.Contains(strings.ToLower(imageURL), ".gif") {
+		mediaType = "GIF"
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("%s sent successfully to %s", mediaType, chatJID)), nil
+}
+
+// handleSendVideo handles the send_video tool request.
+func (m *MCPServer) handleSendVideo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	chatJID, err := request.RequireString("chat_jid")
+	if err != nil {
+		return mcp.NewToolResultError("chat_jid parameter is required"), nil
+	}
+
+	video, err := request.RequireString("video")
+	if err != nil {
+		return mcp.NewToolResultError("video parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	caption := request.GetString("caption", "")
+	replyTo := request.GetString("reply_to", "")
+
+	err = m.wa.SendVideoMessage(ctx, chatJID, video, caption, replyTo)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to send video: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Video sent successfully to %s", chatJID)), nil
+}
+
 // handleLoadMoreMessages handles the load_more_messages tool request.
 func (m *MCPServer) handleLoadMoreMessages(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// get required chat_jid
@@ -572,4 +631,72 @@ func (m *MCPServer) handleGetMyInfo(ctx context.Context, request mcp.CallToolReq
 	}
 
 	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleDownloadMedia force-downloads skipped or failed media files.
+func (m *MCPServer) handleDownloadMedia(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	messageID := request.GetString("message_id", "")
+
+	limit := int(request.GetFloat("limit", 10.0))
+	if limit > 50 {
+		limit = 50
+	}
+
+	if messageID != "" {
+		// download specific message
+		meta, err := m.mediaStore.GetMediaMetadata(messageID)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to get metadata: %v", err)), nil
+		}
+		if meta == nil {
+			return mcp.NewToolResultError(fmt.Sprintf("no media found for message %s", messageID)), nil
+		}
+		if meta.DownloadStatus == "downloaded" {
+			return mcp.NewToolResultText(fmt.Sprintf("Already downloaded: %s → %s", meta.FileName, meta.FilePath)), nil
+		}
+
+		filePath, err := m.wa.DownloadMediaFromMetadata(ctx, meta)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("download failed for %s: %v", meta.FileName, err)), nil
+		}
+		m.mediaStore.UpdateDownloadStatus(messageID, "downloaded", &filePath, nil)
+		return mcp.NewToolResultText(fmt.Sprintf("Downloaded: %s → %s", meta.FileName, filePath)), nil
+	}
+
+	// download all skipped/failed
+	skipped, err := m.mediaStore.GetSkippedMedia(limit)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to list skipped media: %v", err)), nil
+	}
+
+	if len(skipped) == 0 {
+		return mcp.NewToolResultText("No skipped or failed media to download."), nil
+	}
+
+	var results []string
+	var dlErrors []string
+
+	for _, meta := range skipped {
+		filePath, err := m.wa.DownloadMediaFromMetadata(ctx, &meta)
+		if err != nil {
+			errMsg := fmt.Sprintf("FAILED %s (%s): %v", meta.FileName, meta.MessageID[:8], err)
+			dlErrors = append(dlErrors, errMsg)
+			m.mediaStore.UpdateDownloadStatus(meta.MessageID, "failed", nil, err)
+		} else {
+			m.mediaStore.UpdateDownloadStatus(meta.MessageID, "downloaded", &filePath, nil)
+			results = append(results, fmt.Sprintf("OK %s → %s", meta.FileName, filePath))
+		}
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Force download results (%d files):\n\n", len(skipped))
+	for _, r := range results {
+		fmt.Fprintf(&sb, "✅ %s\n", r)
+	}
+	for _, e := range dlErrors {
+		fmt.Fprintf(&sb, "❌ %s\n", e)
+	}
+	fmt.Fprintf(&sb, "\nTotal: %d OK, %d failed", len(results), len(dlErrors))
+
+	return mcp.NewToolResultText(sb.String()), nil
 }

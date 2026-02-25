@@ -357,6 +357,111 @@ func (c *Client) downloadMediaWithRetry(ctx context.Context, msg *waE2E.Message,
 	return "", fmt.Errorf("download failed after %d attempts: %s", maxRetries, strings.Join(allErrors, "; "))
 }
 
+// DownloadMediaFromMetadata downloads media using only stored metadata (no proto message needed).
+// This allows force-downloading media that was previously skipped.
+func (c *Client) DownloadMediaFromMetadata(ctx context.Context, meta *storage.MediaMetadata) (string, error) {
+	if meta == nil {
+		return "", fmt.Errorf("nil metadata")
+	}
+	if len(meta.MediaKey) == 0 || meta.DirectPath == "" {
+		return "", fmt.Errorf("missing media key or direct path")
+	}
+
+	// construct a synthetic proto message from stored metadata
+	fileLen := uint64(meta.FileSize)
+	mime := meta.MimeType
+
+	var downloadable any
+	switch {
+	case strings.HasPrefix(mime, "image/"):
+		downloadable = &waE2E.ImageMessage{
+			MediaKey:      meta.MediaKey,
+			DirectPath:    &meta.DirectPath,
+			FileSHA256:    meta.FileSHA256,
+			FileEncSHA256: meta.FileEncSHA256,
+			FileLength:    &fileLen,
+			Mimetype:      &mime,
+		}
+	case strings.HasPrefix(mime, "video/"):
+		downloadable = &waE2E.VideoMessage{
+			MediaKey:      meta.MediaKey,
+			DirectPath:    &meta.DirectPath,
+			FileSHA256:    meta.FileSHA256,
+			FileEncSHA256: meta.FileEncSHA256,
+			FileLength:    &fileLen,
+			Mimetype:      &mime,
+		}
+	case strings.HasPrefix(mime, "audio/"):
+		downloadable = &waE2E.AudioMessage{
+			MediaKey:      meta.MediaKey,
+			DirectPath:    &meta.DirectPath,
+			FileSHA256:    meta.FileSHA256,
+			FileEncSHA256: meta.FileEncSHA256,
+			FileLength:    &fileLen,
+			Mimetype:      &mime,
+		}
+	default:
+		// documents and everything else
+		downloadable = &waE2E.DocumentMessage{
+			MediaKey:      meta.MediaKey,
+			DirectPath:    &meta.DirectPath,
+			FileSHA256:    meta.FileSHA256,
+			FileEncSHA256: meta.FileEncSHA256,
+			FileLength:    &fileLen,
+			Mimetype:      &mime,
+		}
+	}
+
+	// generate file path
+	filePath, err := c.generateMediaFilePath(meta)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate file path: %w", err)
+	}
+
+	// create directory
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// download
+	var data []byte
+	switch d := downloadable.(type) {
+	case *waE2E.ImageMessage:
+		data, err = c.wa.Download(ctx, d)
+	case *waE2E.VideoMessage:
+		data, err = c.wa.Download(ctx, d)
+	case *waE2E.AudioMessage:
+		data, err = c.wa.Download(ctx, d)
+	case *waE2E.DocumentMessage:
+		data, err = c.wa.Download(ctx, d)
+	}
+	if err != nil {
+		return "", fmt.Errorf("download failed: %w", err)
+	}
+
+	// write file
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// verify
+	if err := c.verifyDownload(filePath, meta); err != nil {
+		os.Remove(filePath)
+		return "", fmt.Errorf("verification failed: %w", err)
+	}
+
+	// compute relative path
+	relPath, err := filepath.Rel(c.mediaConfig.StoragePath, filePath)
+	if err != nil {
+		os.Remove(filePath)
+		return "", fmt.Errorf("failed to compute relative path: %w", err)
+	}
+
+	c.log.Infof("Force-downloaded media %s to %s (%d bytes)", meta.MessageID, relPath, meta.FileSize)
+	return relPath, nil
+}
+
 // intPtr returns a pointer to the given integer value.
 func intPtr(i int) *int {
 	return &i

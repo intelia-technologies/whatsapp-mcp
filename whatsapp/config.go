@@ -25,7 +25,7 @@ func LoadMediaConfig() MediaConfig {
 	}
 
 	// parse allowed types
-	typesStr := config.GetEnv("MEDIA_AUTO_DOWNLOAD_TYPES", "image,audio,sticker")
+	typesStr := config.GetEnv("MEDIA_AUTO_DOWNLOAD_TYPES", "image,audio,ptt,sticker")
 	cfg.AutoDownloadTypes = make(map[string]bool)
 	for _, t := range strings.Split(typesStr, ",") {
 		cfg.AutoDownloadTypes[strings.TrimSpace(t)] = true
