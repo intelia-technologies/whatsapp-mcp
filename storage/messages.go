@@ -15,6 +15,7 @@ type Message struct {
 	Timestamp   time.Time
 	IsFromMe    bool
 	MessageType string
+	ReplyToID   string // ID of the message this is replying to or reacting to (optional)
 }
 
 // MessageWithNames represents a message with sender and chat names from the database view.
@@ -40,9 +41,15 @@ func NewMessageStore(db *sql.DB) *MessageStore {
 func (s *MessageStore) SaveMessage(msg Message) error {
 	query := `
 	INSERT OR REPLACE INTO messages
-	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
+	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type, reply_to_id)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
+
+	// Use nil for empty reply_to_id
+	var replyToID interface{}
+	if msg.ReplyToID != "" {
+		replyToID = msg.ReplyToID
+	}
 
 	_, err := s.db.Exec(
 		query,
@@ -53,6 +60,7 @@ func (s *MessageStore) SaveMessage(msg Message) error {
 		msg.Timestamp.Unix(),
 		msg.IsFromMe,
 		msg.MessageType,
+		replyToID,
 	)
 
 	if err != nil {
@@ -75,8 +83,8 @@ func (s *MessageStore) SaveBulk(messages []Message) error {
 
 	stmt, err := tx.Prepare(`
 	INSERT OR REPLACE INTO messages
-	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type)
-	VALUES (?, ?, ?, ?, ?, ?, ?)
+	(id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type, reply_to_id)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -85,6 +93,12 @@ func (s *MessageStore) SaveBulk(messages []Message) error {
 	defer stmt.Close()
 
 	for _, msg := range messages {
+		// Use nil for empty reply_to_id
+		var replyToID interface{}
+		if msg.ReplyToID != "" {
+			replyToID = msg.ReplyToID
+		}
+
 		_, err := stmt.Exec(
 			msg.ID,
 			msg.ChatJID,
@@ -93,6 +107,7 @@ func (s *MessageStore) SaveBulk(messages []Message) error {
 			msg.Timestamp.Unix(),
 			msg.IsFromMe,
 			msg.MessageType,
+			replyToID,
 		)
 
 		if err != nil {
