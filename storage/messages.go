@@ -307,6 +307,33 @@ func (s *MessageStore) GetChatMessagesWithNamesFiltered(
 	return s.scanMessagesWithNames(rows)
 }
 
+// SaveMessageProto stores the serialized protobuf for a sent message.
+// This is used for retry receipt handling when the recipient can't decrypt.
+func (s *MessageStore) SaveMessageProto(messageID string, protoBytes []byte) error {
+	_, err := s.db.Exec(
+		"UPDATE messages SET message_proto = ? WHERE id = ?",
+		protoBytes, messageID,
+	)
+	return err
+}
+
+// GetMessageProto retrieves the serialized protobuf for a message.
+// Returns nil if the message or proto is not found.
+func (s *MessageStore) GetMessageProto(messageID string) ([]byte, error) {
+	var protoBytes []byte
+	err := s.db.QueryRow(
+		"SELECT message_proto FROM messages WHERE id = ?",
+		messageID,
+	).Scan(&protoBytes)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return protoBytes, nil
+}
+
 // scanMessages converts SQL rows into Message objects.
 func (s *MessageStore) scanMessages(rows *sql.Rows) ([]Message, error) {
 	var messages []Message
