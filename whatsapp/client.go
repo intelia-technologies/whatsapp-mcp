@@ -147,6 +147,28 @@ func NewClient(store *storage.MessageStore, mediaStore *storage.MediaStore, webh
 		cancel:           cancel,
 	}
 
+	// Configure retry receipt handler: when a recipient can't decrypt a message,
+	// WhatsApp sends a retry receipt. This callback loads the original protobuf
+	// from the database so the message can be re-encrypted and resent.
+	waClient.GetMessageForRetry = func(requester, to types.JID, id types.MessageID) *waE2E.Message {
+		protoBytes, err := store.GetMessageProto(string(id))
+		if err != nil {
+			logger.Warnf("Error loading message proto for retry %s: %v", id, err)
+			return nil
+		}
+		if protoBytes == nil {
+			logger.Debugf("No stored proto for retry %s", id)
+			return nil
+		}
+		var msg waE2E.Message
+		if err := proto.Unmarshal(protoBytes, &msg); err != nil {
+			logger.Warnf("Error unmarshalling message proto for retry %s: %v", id, err)
+			return nil
+		}
+		logger.Infof("Loaded message proto for retry %s", id)
+		return &msg
+	}
+
 	waClient.AddEventHandler(client.eventHandler)
 
 	return client, nil
@@ -240,6 +262,9 @@ func (c *Client) SendTextMessage(ctx context.Context, chatJID string, text strin
 		return err
 	}
 
+	// Add to recent messages cache for retry receipt handling
+	c.wa.DangerousInternals().AddRecentMessage(targetJID, resp.ID, msg, nil)
+
 	c.store.SaveMessage(storage.Message{
 		ID:          resp.ID,
 		ChatJID:     chatJID,
@@ -249,6 +274,11 @@ func (c *Client) SendTextMessage(ctx context.Context, chatJID string, text strin
 		IsFromMe:    true,
 		MessageType: "text",
 	})
+
+	// Persist protobuf for retry receipt handling across restarts
+	if protoBytes, err := proto.Marshal(msg); err == nil {
+		c.store.SaveMessageProto(resp.ID, protoBytes)
+	}
 
 	return nil
 }
@@ -478,6 +508,9 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 		return fmt.Errorf("failed to send image: %w", err)
 	}
 
+	// Add to recent messages cache for retry receipt handling
+	c.wa.DangerousInternals().AddRecentMessage(targetJID, sendResp.ID, msg, nil)
+
 	c.log.Infof("Image sent successfully! ID=%s", sendResp.ID)
 	// Save to DB
 	msgType := "image"
@@ -498,6 +531,11 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 		IsFromMe:    true,
 		MessageType: msgType,
 	})
+
+	// Persist protobuf for retry receipt handling across restarts
+	if protoBytes, err := proto.Marshal(msg); err == nil {
+		c.store.SaveMessageProto(sendResp.ID, protoBytes)
+	}
 
 	return nil
 }
@@ -560,6 +598,9 @@ func (c *Client) SendVideoMessage(ctx context.Context, chatJID string, videoSour
 		return fmt.Errorf("failed to send video: %w", err)
 	}
 
+	// Add to recent messages cache for retry receipt handling
+	c.wa.DangerousInternals().AddRecentMessage(targetJID, sendResp.ID, msg, nil)
+
 	c.log.Infof("Video sent successfully! ID=%s", sendResp.ID)
 	text := caption
 	if text == "" {
@@ -575,6 +616,11 @@ func (c *Client) SendVideoMessage(ctx context.Context, chatJID string, videoSour
 		IsFromMe:    true,
 		MessageType: "video",
 	})
+
+	// Persist protobuf for retry receipt handling across restarts
+	if protoBytes, err := proto.Marshal(msg); err == nil {
+		c.store.SaveMessageProto(sendResp.ID, protoBytes)
+	}
 
 	return nil
 }
