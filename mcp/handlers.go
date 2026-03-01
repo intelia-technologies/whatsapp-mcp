@@ -633,6 +633,188 @@ func (m *MCPServer) handleGetMyInfo(ctx context.Context, request mcp.CallToolReq
 	return mcp.NewToolResultText(result.String()), nil
 }
 
+// ── Community handlers ──────────────────────────────────────────────────────
+
+// handleCreateCommunity creates a new WhatsApp community.
+func (m *MCPServer) handleCreateCommunity(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError("name parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	info, err := m.wa.CreateCommunity(ctx, name)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to create community: %v", err)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Community created successfully!\n\n")
+	fmt.Fprintf(&result, "Name: %s\n", info.GroupName.Name)
+	fmt.Fprintf(&result, "JID: %s\n", info.JID.String())
+	fmt.Fprintf(&result, "Owner: %s\n", info.OwnerJID.String())
+	fmt.Fprintf(&result, "Created: %s\n", m.formatDateTime(info.GroupCreated))
+	fmt.Fprintf(&result, "Participants: %d\n", len(info.Participants))
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleCreateCommunityGroup creates a group inside a community.
+func (m *MCPServer) handleCreateCommunityGroup(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	communityJID, err := request.RequireString("community_jid")
+	if err != nil {
+		return mcp.NewToolResultError("community_jid parameter is required"), nil
+	}
+
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError("name parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	info, err := m.wa.CreateCommunityGroup(ctx, communityJID, name)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to create community group: %v", err)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Community group created successfully!\n\n")
+	fmt.Fprintf(&result, "Name: %s\n", info.GroupName.Name)
+	fmt.Fprintf(&result, "JID: %s\n", info.JID.String())
+	fmt.Fprintf(&result, "Parent community: %s\n", communityJID)
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleListCommunityGroups lists all sub-groups of a community.
+func (m *MCPServer) handleListCommunityGroups(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	communityJID, err := request.RequireString("community_jid")
+	if err != nil {
+		return mcp.NewToolResultError("community_jid parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	groups, err := m.wa.ListCommunityGroups(ctx, communityJID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to list community groups: %v", err)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Community %s has %d sub-groups:\n\n", communityJID, len(groups))
+
+	for i, g := range groups {
+		defaultTag := ""
+		if g.IsDefaultSubGroup {
+			defaultTag = " [default/announcements]"
+		}
+		fmt.Fprintf(&result, "%d. %s%s\n", i+1, g.GroupName.Name, defaultTag)
+		fmt.Fprintf(&result, "   JID: %s\n\n", g.JID.String())
+	}
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleUnlinkCommunityGroup removes a group from a community.
+func (m *MCPServer) handleUnlinkCommunityGroup(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	communityJID, err := request.RequireString("community_jid")
+	if err != nil {
+		return mcp.NewToolResultError("community_jid parameter is required"), nil
+	}
+
+	groupJID, err := request.RequireString("group_jid")
+	if err != nil {
+		return mcp.NewToolResultError("group_jid parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	err = m.wa.UnlinkGroupFromCommunity(ctx, communityJID, groupJID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to unlink group: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Group %s removed from community %s", groupJID, communityJID)), nil
+}
+
+// handleLinkCommunityGroup adds an existing group to a community.
+func (m *MCPServer) handleLinkCommunityGroup(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	communityJID, err := request.RequireString("community_jid")
+	if err != nil {
+		return mcp.NewToolResultError("community_jid parameter is required"), nil
+	}
+
+	groupJID, err := request.RequireString("group_jid")
+	if err != nil {
+		return mcp.NewToolResultError("group_jid parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	err = m.wa.LinkGroupToCommunity(ctx, communityJID, groupJID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to link group: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Group %s added to community %s", groupJID, communityJID)), nil
+}
+
+// handleGetCommunityInfo returns info about a community.
+func (m *MCPServer) handleGetCommunityInfo(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	communityJID, err := request.RequireString("community_jid")
+	if err != nil {
+		return mcp.NewToolResultError("community_jid parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	info, err := m.wa.GetCommunityInfo(ctx, communityJID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to get community info: %v", err)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Community: %s\n", info.GroupName.Name)
+	fmt.Fprintf(&result, "JID: %s\n", info.JID.String())
+	fmt.Fprintf(&result, "Owner: %s\n", info.OwnerJID.String())
+	fmt.Fprintf(&result, "Created: %s\n", m.formatDateTime(info.GroupCreated))
+	fmt.Fprintf(&result, "Participants: %d\n", len(info.Participants))
+	if info.GroupTopic.Topic != "" {
+		fmt.Fprintf(&result, "Description: %s\n", info.GroupTopic.Topic)
+	}
+	fmt.Fprintf(&result, "Locked: %v\n", info.IsLocked)
+	fmt.Fprintf(&result, "Announcements only: %v\n", info.IsAnnounce)
+
+	if len(info.Participants) > 0 {
+		result.WriteString("\nParticipants:\n")
+		for _, p := range info.Participants {
+			role := "member"
+			if p.IsSuperAdmin {
+				role = "super-admin"
+			} else if p.IsAdmin {
+				role = "admin"
+			}
+			fmt.Fprintf(&result, "  - %s (%s)\n", p.JID.String(), role)
+		}
+	}
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
 // handleDownloadMedia force-downloads skipped or failed media files.
 func (m *MCPServer) handleDownloadMedia(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	messageID := request.GetString("message_id", "")
