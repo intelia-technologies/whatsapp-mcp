@@ -777,6 +777,77 @@ func (c *Client) GetMyInfo(ctx context.Context) (*MyInfo, error) {
 	}, nil
 }
 
+// ── Community / Group management ─────────────────────────────────────────────
+
+// CreateCommunity creates a WhatsApp community (parent group).
+func (c *Client) CreateCommunity(ctx context.Context, name string) (*types.GroupInfo, error) {
+	req := whatsmeow.ReqCreateGroup{Name: name}
+	req.IsParent = true
+	return c.wa.CreateGroup(ctx, req)
+}
+
+// CreateCommunityGroup creates a new group inside an existing community.
+func (c *Client) CreateCommunityGroup(ctx context.Context, communityJID string, name string) (*types.GroupInfo, error) {
+	parentJID, err := types.ParseJID(communityJID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid community JID: %w", err)
+	}
+	req := whatsmeow.ReqCreateGroup{Name: name}
+	req.LinkedParentJID = parentJID
+	return c.wa.CreateGroup(ctx, req)
+}
+
+// ListCommunityGroups returns all sub-groups of a community.
+func (c *Client) ListCommunityGroups(ctx context.Context, communityJID string) ([]*types.GroupLinkTarget, error) {
+	parentJID, err := types.ParseJID(communityJID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid community JID: %w", err)
+	}
+	return c.wa.GetSubGroups(ctx, parentJID)
+}
+
+// UnlinkGroupFromCommunity removes a group from a community.
+func (c *Client) UnlinkGroupFromCommunity(ctx context.Context, communityJID string, groupJID string) error {
+	parentJID, err := types.ParseJID(communityJID)
+	if err != nil {
+		return fmt.Errorf("invalid community JID: %w", err)
+	}
+	childJID, err := types.ParseJID(groupJID)
+	if err != nil {
+		return fmt.Errorf("invalid group JID: %w", err)
+	}
+	return c.wa.UnlinkGroup(ctx, parentJID, childJID)
+}
+
+// LinkGroupToCommunity adds an existing group to a community.
+func (c *Client) LinkGroupToCommunity(ctx context.Context, communityJID string, groupJID string) error {
+	parentJID, err := types.ParseJID(communityJID)
+	if err != nil {
+		return fmt.Errorf("invalid community JID: %w", err)
+	}
+	childJID, err := types.ParseJID(groupJID)
+	if err != nil {
+		return fmt.Errorf("invalid group JID: %w", err)
+	}
+	return c.wa.LinkGroup(ctx, parentJID, childJID)
+}
+
+// GetCommunityInfo returns info about a community (parent group).
+func (c *Client) GetCommunityInfo(ctx context.Context, communityJID string) (*types.GroupInfo, error) {
+	jid, err := types.ParseJID(communityJID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid community JID: %w", err)
+	}
+	info, err := c.wa.GetGroupInfo(ctx, jid)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsParent {
+		return nil, fmt.Errorf("JID %s is not a community (parent group)", communityJID)
+	}
+	return info, nil
+}
+
 // getEnabledTypes returns a list of enabled media types for logging.
 func getEnabledTypes(types map[string]bool) []string {
 	var enabled []string

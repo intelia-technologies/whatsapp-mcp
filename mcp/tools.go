@@ -162,6 +162,92 @@ func (m *MCPServer) registerTools() {
 		m.handleGetMyInfo,
 	)
 
+	// ── Community tools ──────────────────────────────────────────────────
+
+	// 11. create community
+	m.server.AddTool(
+		mcp.NewTool("create_community",
+			mcp.WithDescription("Create a WhatsApp community (parent group). Returns the community JID and details."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("name for the community (max 25 characters)"),
+			),
+		),
+		m.handleCreateCommunity,
+	)
+
+	// 12. create community group
+	m.server.AddTool(
+		mcp.NewTool("create_community_group",
+			mcp.WithDescription("Create a new group inside an existing WhatsApp community."),
+			mcp.WithString("community_jid",
+				mcp.Required(),
+				mcp.Description("JID of the parent community"),
+			),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("name for the new group (max 25 characters)"),
+			),
+		),
+		m.handleCreateCommunityGroup,
+	)
+
+	// 13. list community groups
+	m.server.AddTool(
+		mcp.NewTool("list_community_groups",
+			mcp.WithDescription("List all sub-groups of a WhatsApp community."),
+			mcp.WithString("community_jid",
+				mcp.Required(),
+				mcp.Description("JID of the parent community"),
+			),
+		),
+		m.handleListCommunityGroups,
+	)
+
+	// 14. unlink community group
+	m.server.AddTool(
+		mcp.NewTool("unlink_community_group",
+			mcp.WithDescription("Remove a group from a WhatsApp community."),
+			mcp.WithString("community_jid",
+				mcp.Required(),
+				mcp.Description("JID of the parent community"),
+			),
+			mcp.WithString("group_jid",
+				mcp.Required(),
+				mcp.Description("JID of the group to remove"),
+			),
+		),
+		m.handleUnlinkCommunityGroup,
+	)
+
+	// 15. link community group
+	m.server.AddTool(
+		mcp.NewTool("link_community_group",
+			mcp.WithDescription("Add an existing group to a WhatsApp community."),
+			mcp.WithString("community_jid",
+				mcp.Required(),
+				mcp.Description("JID of the parent community"),
+			),
+			mcp.WithString("group_jid",
+				mcp.Required(),
+				mcp.Description("JID of the group to add"),
+			),
+		),
+		m.handleLinkCommunityGroup,
+	)
+
+	// 16. get community info
+	m.server.AddTool(
+		mcp.NewTool("get_community_info",
+			mcp.WithDescription("Get details about a WhatsApp community, including name, participants, and settings."),
+			mcp.WithString("community_jid",
+				mcp.Required(),
+				mcp.Description("JID of the community"),
+			),
+		),
+		m.handleGetCommunityInfo,
+	)
+
 	// 10. force download skipped/failed media
 	m.server.AddTool(
 		mcp.NewTool("download_media",
