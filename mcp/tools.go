@@ -136,6 +136,31 @@ func (m *MCPServer) registerTools() {
 		m.handleSendVideo,
 	)
 
+	// send document
+	m.server.AddTool(
+		mcp.NewTool("send_document",
+			mcp.WithDescription("Send a document or file (PDF, ZIP, DOCX, etc.) to a WhatsApp chat. Accepts a local file path (absolute or ~/...) or a URL."),
+			mcp.WithString("chat_jid",
+				mcp.Required(),
+				mcp.Description("recipient chat JID from find_chat or list_chats"),
+			),
+			mcp.WithString("file_path",
+				mcp.Required(),
+				mcp.Description("local file path (absolute or ~/...) or URL of the document to send"),
+			),
+			mcp.WithString("file_name",
+				mcp.Description("filename shown in WhatsApp (optional, defaults to basename of file_path)"),
+			),
+			mcp.WithString("caption",
+				mcp.Description("optional caption text for the document"),
+			),
+			mcp.WithString("reply_to",
+				mcp.Description("message ID to reply to (optional)"),
+			),
+		),
+		m.handleSendDocument,
+	)
+
 	// 7. load more messages on-demand
 	m.server.AddTool(
 		mcp.NewTool("load_more_messages",
@@ -246,6 +271,32 @@ func (m *MCPServer) registerTools() {
 			),
 		),
 		m.handleGetCommunityInfo,
+	)
+
+	// ── Profile picture tools ────────────────────────────────────────────
+
+	// get profile picture for a single JID
+	m.server.AddTool(
+		mcp.NewTool("get_profile_picture",
+			mcp.WithDescription("Get the profile picture URL for a WhatsApp contact or group. Returns the full-resolution picture URL that can be downloaded. The picture may be unavailable if the contact has privacy settings enabled."),
+			mcp.WithString("jid",
+				mcp.Required(),
+				mcp.Description("WhatsApp JID of the contact or group (e.g., [phone_number]@s.whatsapp.net)"),
+			),
+		),
+		m.handleGetProfilePicture,
+	)
+
+	// get profile pictures for multiple JIDs in batch
+	m.server.AddTool(
+		mcp.NewTool("get_contact_profile_pictures",
+			mcp.WithDescription("Get profile picture URLs for multiple WhatsApp contacts/groups in a single batch call. More efficient than calling get_profile_picture individually for each contact. Returns URLs for all requested JIDs."),
+			mcp.WithString("jids",
+				mcp.Required(),
+				mcp.Description("comma-separated list of WhatsApp JIDs (e.g., '[phone_1]@s.whatsapp.net,[phone_2]@s.whatsapp.net')"),
+			),
+		),
+		m.handleGetContactProfilePictures,
 	)
 
 	// 10. force download skipped/failed media

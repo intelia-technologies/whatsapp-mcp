@@ -848,6 +848,65 @@ func (c *Client) GetCommunityInfo(ctx context.Context, communityJID string) (*ty
 	return info, nil
 }
 
+// ProfilePicture contains profile picture info for a single JID.
+type ProfilePicture struct {
+	JID       string // The JID that was queried
+	PictureID string // Profile picture ID (empty if not set)
+	URL       string // Profile picture download URL (empty if not set or private)
+	Error     string // Error message if the lookup failed
+}
+
+// GetProfilePicture retrieves the profile picture URL for a single JID.
+func (c *Client) GetProfilePicture(ctx context.Context, jidStr string) (*ProfilePicture, error) {
+	if !c.IsLoggedIn() {
+		return nil, fmt.Errorf("not logged in")
+	}
+
+	targetJID, err := types.ParseJID(jidStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JID: %w", err)
+	}
+
+	pic := &ProfilePicture{JID: jidStr}
+
+	picInfo, err := c.wa.GetProfilePictureInfo(ctx, targetJID, &whatsmeow.GetProfilePictureParams{
+		Preview: false,
+	})
+	if err != nil {
+		// Not an error worth propagating — the picture is just unavailable
+		pic.Error = err.Error()
+		return pic, nil
+	}
+	if picInfo != nil {
+		pic.PictureID = picInfo.ID
+		pic.URL = picInfo.URL
+	}
+
+	return pic, nil
+}
+
+// GetProfilePictures retrieves profile picture URLs for multiple JIDs.
+func (c *Client) GetProfilePictures(ctx context.Context, jidStrs []string) ([]ProfilePicture, error) {
+	if !c.IsLoggedIn() {
+		return nil, fmt.Errorf("not logged in")
+	}
+
+	results := make([]ProfilePicture, 0, len(jidStrs))
+	for _, jidStr := range jidStrs {
+		pic, err := c.GetProfilePicture(ctx, jidStr)
+		if err != nil {
+			results = append(results, ProfilePicture{
+				JID:   jidStr,
+				Error: err.Error(),
+			})
+			continue
+		}
+		results = append(results, *pic)
+	}
+
+	return results, nil
+}
+
 // getEnabledTypes returns a list of enabled media types for logging.
 func getEnabledTypes(types map[string]bool) []string {
 	var enabled []string
@@ -857,4 +916,97 @@ func getEnabledTypes(types map[string]bool) []string {
 		}
 	}
 	return enabled
+}
+
+// SendDocumentMessage sends a document/file to a WhatsApp chat.
+// fileSource can be a URL (http/https) or a local file path (absolute or ~/...).
+func (c *Client) SendDocumentMessage(ctx context.Context, chatJID string, fileSource string, fileName string, caption string, replyToID string) error {
+	c.log.Infof("SendDocumentMessage called: chatJID=%s, fileSource=%s, fileName=%s", chatJID, fileSource, fileName)
+
+	targetJID, err := types.ParseJID(chatJID)
+	if err != nil {
+		return fmt.Errorf("invalid chat JID: %w", err)
+	}
+
+	data, mimeType, err := c.readMediaSource(fileSource)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Use provided fileName or derive from source path
+	if fileName == "" {
+		fileName = filepath.Base(fileSource)
+		if fileName == "." || fileName == "" {
+			fileName = "document"
+		}
+	}
+
+	uploaded, err := c.wa.Upload(ctx, data, whatsmeow.MediaDocument)
+	if err != nil {
+		return fmt.Errorf("failed to upload document: %w", err)
+	}
+
+	docMsg := &waE2E.DocumentMessage{
+		URL:           proto.String(uploaded.URL),
+		DirectPath:    proto.String(uploaded.DirectPath),
+		MediaKey:      uploaded.MediaKey,
+		FileEncSHA256: uploaded.FileEncSHA256,
+		FileSHA256:    uploaded.FileSHA256,
+		FileLength:    proto.Uint64(uint64(len(data))),
+		Mimetype:      proto.String(mimeType),
+		FileName:      proto.String(fileName),
+	}
+	if caption != "" {
+		docMsg.Caption = proto.String(caption)
+	}
+
+	msg := &waE2E.Message{DocumentMessage: docMsg}
+
+	if replyToID != "" {
+		quotedMsg, err := c.store.GetMessageByID(replyToID)
+		if err != nil {
+			return fmt.Errorf("failed to look up quoted message: %w", err)
+		}
+		if quotedMsg == nil {
+			return fmt.Errorf("quoted message %s not found in database", replyToID)
+		}
+		msg.DocumentMessage.ContextInfo = &waE2E.ContextInfo{
+			StanzaID:      proto.String(replyToID),
+			Participant:   proto.String(quotedMsg.SenderJID),
+			QuotedMessage: &waE2E.Message{Conversation: proto.String(quotedMsg.Text)},
+		}
+	}
+
+	c.log.Infof("Sending document message to %s...", chatJID)
+	sendResp, err := c.wa.SendMessage(ctx, targetJID, msg)
+	if err != nil {
+		return fmt.Errorf("failed to send document: %w", err)
+	}
+
+	c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil)
+
+	c.log.Infof("Document sent successfully! ID=%s", sendResp.ID)
+	text := caption
+	if text == "" {
+		text = "[" + fileName + "]"
+	}
+
+	c.store.SaveMessage(storage.Message{
+		ID:          sendResp.ID,
+		ChatJID:     chatJID,
+		SenderJID:   sendResp.Sender.String(),
+		Text:        text,
+		Timestamp:   sendResp.Timestamp,
+		IsFromMe:    true,
+		MessageType: "document",
+		ReplyToID:   replyToID,
+	})
+
+	if protoBytes, err := proto.Marshal(msg); err == nil {
+		c.store.SaveMessageProto(sendResp.ID, protoBytes)
+	} else {
+		c.log.Warnf("Failed to marshal message proto for %s: %v", sendResp.ID, err)
+	}
+
+	return nil
 }
