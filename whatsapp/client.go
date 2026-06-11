@@ -263,7 +263,7 @@ func (c *Client) SendTextMessage(ctx context.Context, chatJID string, text strin
 	}
 
 	// Add to recent messages cache for retry receipt handling
-	c.wa.DangerousInternals().AddRecentMessage(targetJID, resp.ID, msg, nil)
+	c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, resp.ID, msg, nil)
 
 	c.store.SaveMessage(storage.Message{
 		ID:          resp.ID,
@@ -511,7 +511,7 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 	}
 
 	// Add to recent messages cache for retry receipt handling
-	c.wa.DangerousInternals().AddRecentMessage(targetJID, sendResp.ID, msg, nil)
+	c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil)
 
 	c.log.Infof("Image sent successfully! ID=%s", sendResp.ID)
 	// Save to DB
@@ -604,7 +604,7 @@ func (c *Client) SendVideoMessage(ctx context.Context, chatJID string, videoSour
 	}
 
 	// Add to recent messages cache for retry receipt handling
-	c.wa.DangerousInternals().AddRecentMessage(targetJID, sendResp.ID, msg, nil)
+	c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil)
 
 	c.log.Infof("Video sent successfully! ID=%s", sendResp.ID)
 	text := caption
