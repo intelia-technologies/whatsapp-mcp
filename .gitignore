@@ -1,3 +1,19 @@
-data/*
+data/
 qr.png
+
+# Local secrets and runtime state
 .env
+.env.local
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Local build outputs and helper scripts
+whatsapp-mcp
+send-message.mjs
+send-message.sh
+start.sh
+
+# OS/editor noise
+.DS_Store

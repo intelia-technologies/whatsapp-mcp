@@ -815,6 +815,88 @@ func (m *MCPServer) handleGetCommunityInfo(ctx context.Context, request mcp.Call
 	return mcp.NewToolResultText(result.String()), nil
 }
 
+// ── Profile picture handlers ────────────────────────────────────────────────
+
+// handleGetProfilePicture returns the profile picture URL for a single JID.
+func (m *MCPServer) handleGetProfilePicture(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	jid, err := request.RequireString("jid")
+	if err != nil {
+		return mcp.NewToolResultError("jid parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	pic, err := m.wa.GetProfilePicture(ctx, jid)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to get profile picture: %v", err)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Profile picture for %s:\n\n", jid)
+
+	if pic.URL != "" {
+		fmt.Fprintf(&result, "Picture ID: %s\n", pic.PictureID)
+		fmt.Fprintf(&result, "URL: %s\n", pic.URL)
+	} else if pic.Error != "" {
+		fmt.Fprintf(&result, "Not available: %s\n", pic.Error)
+	} else {
+		fmt.Fprintf(&result, "No profile picture set.\n")
+	}
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleGetContactProfilePictures returns profile picture URLs for multiple JIDs.
+func (m *MCPServer) handleGetContactProfilePictures(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	jidsStr, err := request.RequireString("jids")
+	if err != nil {
+		return mcp.NewToolResultError("jids parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	// Split comma-separated JIDs and trim whitespace
+	rawJIDs := strings.Split(jidsStr, ",")
+	jids := make([]string, 0, len(rawJIDs))
+	for _, j := range rawJIDs {
+		trimmed := strings.TrimSpace(j)
+		if trimmed != "" {
+			jids = append(jids, trimmed)
+		}
+	}
+
+	if len(jids) == 0 {
+		return mcp.NewToolResultError("no valid JIDs provided"), nil
+	}
+
+	pics, err := m.wa.GetProfilePictures(ctx, jids)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to get profile pictures: %v", err)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Profile pictures for %d contacts:\n\n", len(pics))
+
+	for i, pic := range pics {
+		fmt.Fprintf(&result, "%d. %s\n", i+1, pic.JID)
+		if pic.URL != "" {
+			fmt.Fprintf(&result, "   Picture ID: %s\n", pic.PictureID)
+			fmt.Fprintf(&result, "   URL: %s\n", pic.URL)
+		} else if pic.Error != "" {
+			fmt.Fprintf(&result, "   Not available: %s\n", pic.Error)
+		} else {
+			fmt.Fprintf(&result, "   No profile picture set.\n")
+		}
+		result.WriteString("\n")
+	}
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
 // handleDownloadMedia force-downloads skipped or failed media files.
 func (m *MCPServer) handleDownloadMedia(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	messageID := request.GetString("message_id", "")
@@ -881,4 +963,32 @@ func (m *MCPServer) handleDownloadMedia(ctx context.Context, request mcp.CallToo
 	fmt.Fprintf(&sb, "\nTotal: %d OK, %d failed", len(results), len(dlErrors))
 
 	return mcp.NewToolResultText(sb.String()), nil
+}
+
+// handleSendDocument handles the send_document tool request.
+func (m *MCPServer) handleSendDocument(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	chatJID, err := request.RequireString("chat_jid")
+	if err != nil {
+		return mcp.NewToolResultError("chat_jid parameter is required"), nil
+	}
+
+	filePath, err := request.RequireString("file_path")
+	if err != nil {
+		return mcp.NewToolResultError("file_path parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	fileName := request.GetString("file_name", "")
+	caption := request.GetString("caption", "")
+	replyTo := request.GetString("reply_to", "")
+
+	err = m.wa.SendDocumentMessage(ctx, chatJID, filePath, fileName, caption, replyTo)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to send document: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Document sent successfully to %s", chatJID)), nil
 }
