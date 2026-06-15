@@ -498,6 +498,9 @@ func (s *MessageStore) scanMessagesWithNames(rows *sql.Rows) ([]MessageWithNames
 		var msg MessageWithNames
 		var timestampUnix int64
 
+		// nullable name/text fields (LEFT JOINs in the view can yield NULL)
+		var senderPushName, senderContactName, chatName, text sql.NullString
+
 		// media metadata fields (nullable)
 		var mediaFilePath, mediaFileName, mediaMimeType sql.NullString
 		var mediaFileSize sql.NullInt64
@@ -509,10 +512,10 @@ func (s *MessageStore) scanMessagesWithNames(rows *sql.Rows) ([]MessageWithNames
 			&msg.ID,
 			&msg.ChatJID,
 			&msg.SenderJID,
-			&msg.SenderPushName,
-			&msg.SenderContactName,
-			&msg.ChatName,
-			&msg.Text,
+			&senderPushName,
+			&senderContactName,
+			&chatName,
+			&text,
 			&timestampUnix,
 			&msg.IsFromMe,
 			&msg.MessageType,
@@ -533,6 +536,10 @@ func (s *MessageStore) scanMessagesWithNames(rows *sql.Rows) ([]MessageWithNames
 		}
 
 		msg.Timestamp = time.Unix(timestampUnix, 0)
+		msg.SenderPushName = senderPushName.String
+		msg.SenderContactName = senderContactName.String
+		msg.ChatName = chatName.String
+		msg.Text = text.String
 
 		// populate media metadata if present
 		if mediaFileName.Valid && mediaMimeType.Valid {

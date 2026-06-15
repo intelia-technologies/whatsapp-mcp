@@ -20,7 +20,7 @@ type Chat struct {
 // It returns nil if the chat is not found.
 func (s *MessageStore) GetChatByJID(jid string) (*Chat, error) {
 	query := `
-	SELECT jid, push_name, contact_name, last_message_time, unread_count, is_group
+	SELECT jid, COALESCE(push_name, ''), COALESCE(contact_name, ''), last_message_time, unread_count, is_group
 	FROM chats
 	WHERE jid = ?
 	`
@@ -84,7 +84,7 @@ func (s *MessageStore) SaveChat(chat Chat) error {
 // ListChats returns all chats ordered by last message timestamp.
 func (s *MessageStore) ListChats(limit int) ([]Chat, error) {
 	query := `
-	SELECT jid, push_name, contact_name, last_message_time, unread_count, is_group
+	SELECT jid, COALESCE(push_name, ''), COALESCE(contact_name, ''), last_message_time, unread_count, is_group
 	FROM chats
 	ORDER BY last_message_time DESC
 	LIMIT ?
@@ -129,7 +129,7 @@ func (s *MessageStore) SearchChatsFiltered(search string, useGlob bool, limit in
 	// choose LIKE or GLOB based on pattern type
 	if useGlob {
 		query = `
-		SELECT jid, push_name, contact_name, last_message_time, unread_count, is_group
+		SELECT jid, COALESCE(push_name, ''), COALESCE(contact_name, ''), last_message_time, unread_count, is_group
 		FROM chats
 		WHERE push_name GLOB ? OR contact_name GLOB ? OR jid GLOB ?
 		ORDER BY last_message_time DESC
@@ -138,7 +138,7 @@ func (s *MessageStore) SearchChatsFiltered(search string, useGlob bool, limit in
 		searchPattern = search
 	} else {
 		query = `
-		SELECT jid, push_name, contact_name, last_message_time, unread_count, is_group
+		SELECT jid, COALESCE(push_name, ''), COALESCE(contact_name, ''), last_message_time, unread_count, is_group
 		FROM chats
 		WHERE push_name LIKE ? OR contact_name LIKE ? OR jid LIKE ?
 		ORDER BY last_message_time DESC
@@ -180,7 +180,7 @@ func (s *MessageStore) SearchChatsFiltered(search string, useGlob bool, limit in
 // SearchChats searches chats by name or JID with fuzzy matching.
 func (s *MessageStore) SearchChats(search string, limit int) ([]Chat, error) {
 	query := `
-	SELECT jid, push_name, contact_name, last_message_time, unread_count, is_group
+	SELECT jid, COALESCE(push_name, ''), COALESCE(contact_name, ''), last_message_time, unread_count, is_group
 	FROM chats
 	WHERE push_name LIKE ? OR contact_name LIKE ? OR jid LIKE ?
 	ORDER BY last_message_time DESC
