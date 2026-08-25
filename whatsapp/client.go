@@ -16,6 +16,8 @@ import (
 	"whatsapp-mcp/paths"
 	"whatsapp-mcp/storage"
 
+	utilffmpeg "go.mau.fi/util/ffmpeg"
+	"go.mau.fi/util/ffmpeg/waveform"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -385,44 +387,55 @@ func convertGifToMp4(gifData []byte) ([]byte, error) {
 	return os.ReadFile(mp4Path)
 }
 
-// convertAudioToVoiceNote transcodes arbitrary audio into the Ogg/Opus format
-// required by WhatsApp push-to-talk messages and returns its rounded duration.
-func convertAudioToVoiceNote(ctx context.Context, audioData []byte) ([]byte, uint32, error) {
+// convertAudioToVoiceNote transcodes arbitrary audio into the strict format
+// required by WhatsApp mobile clients and returns duration and waveform data.
+func convertAudioToVoiceNote(ctx context.Context, audioData []byte) ([]byte, uint32, []byte, error) {
 	const maxVoiceNoteSize = 16 * 1024 * 1024
 
 	tmpDir, err := os.MkdirTemp("", "wa-voice-*")
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create temp dir: %w", err)
+		return nil, 0, nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	inputPath := filepath.Join(tmpDir, "input")
 	voicePath := filepath.Join(tmpDir, "voice.ogg")
 	if err := os.WriteFile(inputPath, audioData, 0600); err != nil {
-		return nil, 0, fmt.Errorf("failed to write temporary audio: %w", err)
+		return nil, 0, nil, fmt.Errorf("failed to write temporary audio: %w", err)
 	}
 
 	cmd := exec.CommandContext(ctx, mediaExecutable("ffmpeg"), "-y", "-i", inputPath,
 		"-vn",
+		"-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
 		"-c:a", "libopus",
 		"-application", "voip",
 		"-b:a", "32k",
 		"-vbr", "on",
 		"-compression_level", "10",
 		"-ac", "1",
-		"-ar", "48000",
+		"-ar", "16000",
 		"-f", "ogg",
 		voicePath)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, 0, fmt.Errorf("ffmpeg voice-note conversion failed: %w\n%s", err, string(output))
+		return nil, 0, nil, fmt.Errorf("ffmpeg voice-note conversion failed: %w\n%s", err, string(output))
 	}
 
 	voiceData, err := os.ReadFile(voicePath)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to read converted voice note: %w", err)
+		return nil, 0, nil, fmt.Errorf("failed to read converted voice note: %w", err)
 	}
 	if len(voiceData) > maxVoiceNoteSize {
-		return nil, 0, fmt.Errorf("converted voice note is too large (max 16MB)")
+		return nil, 0, nil, fmt.Errorf("converted voice note is too large (max 16MB)")
+	}
+
+	utilffmpeg.SetPath(mediaExecutable("ffmpeg"))
+	waveformValues, err := waveform.Generate(ctx, voicePath, 64, 100)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("failed to generate voice-note waveform: %w", err)
+	}
+	waveformData := make([]byte, len(waveformValues))
+	for i, value := range waveformValues {
+		waveformData[i] = byte(value)
 	}
 
 	durationOutput, err := exec.CommandContext(
@@ -434,19 +447,19 @@ func convertAudioToVoiceNote(ctx context.Context, audioData []byte) ([]byte, uin
 		voicePath,
 	).CombinedOutput()
 	if err != nil {
-		return nil, 0, fmt.Errorf("ffprobe duration detection failed: %w\n%s", err, string(durationOutput))
+		return nil, 0, nil, fmt.Errorf("ffprobe duration detection failed: %w\n%s", err, string(durationOutput))
 	}
 
 	duration, err := strconv.ParseFloat(strings.TrimSpace(string(durationOutput)), 64)
 	if err != nil || duration <= 0 {
-		return nil, 0, fmt.Errorf("invalid converted audio duration %q", strings.TrimSpace(string(durationOutput)))
+		return nil, 0, nil, fmt.Errorf("invalid converted audio duration %q", strings.TrimSpace(string(durationOutput)))
 	}
 	seconds := uint32(math.Round(duration))
 	if seconds == 0 {
 		seconds = 1
 	}
 
-	return voiceData, seconds, nil
+	return voiceData, seconds, waveformData, nil
 }
 
 // SendImageMessage sends an image or GIF to a WhatsApp chat.
@@ -723,7 +736,7 @@ func (c *Client) SendVoiceMessage(ctx context.Context, chatJID string, audioSour
 		return fmt.Errorf("failed to read audio: %w", err)
 	}
 
-	voiceData, duration, err := convertAudioToVoiceNote(ctx, audioData)
+	voiceData, duration, waveformData, err := convertAudioToVoiceNote(ctx, audioData)
 	if err != nil {
 		return err
 	}
@@ -742,6 +755,7 @@ func (c *Client) SendVoiceMessage(ctx context.Context, chatJID string, audioSour
 		FileLength:    proto.Uint64(uint64(len(voiceData))),
 		Mimetype:      proto.String("audio/ogg; codecs=opus"),
 		Seconds:       proto.Uint32(duration),
+		Waveform:      waveformData,
 		PTT:           proto.Bool(true),
 	}
 	msg := &waE2E.Message{AudioMessage: audioMsg}

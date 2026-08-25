@@ -8,6 +8,7 @@ require (
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	go.mau.fi/util v0.9.9
 	go.mau.fi/whatsmeow v0.0.0-20260609091626-4e622162b959
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.42.2
@@ -34,7 +35,6 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
-	go.mau.fi/util v0.9.9 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
 	golang.org/x/net v0.55.0 // indirect
