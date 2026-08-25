@@ -499,6 +499,30 @@ func (m *MCPServer) handleSendVideo(ctx context.Context, request mcp.CallToolReq
 	return mcp.NewToolResultText(fmt.Sprintf("Video sent successfully to %s", chatJID)), nil
 }
 
+// handleSendVoiceNote handles the send_voice_note tool request.
+func (m *MCPServer) handleSendVoiceNote(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	chatJID, err := request.RequireString("chat_jid")
+	if err != nil {
+		return mcp.NewToolResultError("chat_jid parameter is required"), nil
+	}
+
+	audio, err := request.RequireString("audio")
+	if err != nil {
+		return mcp.NewToolResultError("audio parameter is required"), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	replyTo := request.GetString("reply_to", "")
+	if err := m.wa.SendVoiceMessage(ctx, chatJID, audio, replyTo); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to send voice note: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Voice note sent successfully to %s", chatJID)), nil
+}
+
 // handleLoadMoreMessages handles the load_more_messages tool request.
 func (m *MCPServer) handleLoadMoreMessages(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// get required chat_jid

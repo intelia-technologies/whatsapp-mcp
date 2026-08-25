@@ -136,6 +136,25 @@ func (m *MCPServer) registerTools() {
 		m.handleSendVideo,
 	)
 
+	// send voice note
+	m.server.AddTool(
+		mcp.NewTool("send_voice_note",
+			mcp.WithDescription("Send an MP3, M4A, WAV, OGG, or other audio file as a WhatsApp voice note. Accepts a URL or local file path and transcodes the audio to Ogg/Opus."),
+			mcp.WithString("chat_jid",
+				mcp.Required(),
+				mcp.Description("recipient chat JID from find_chat or list_chats"),
+			),
+			mcp.WithString("audio",
+				mcp.Required(),
+				mcp.Description("URL or local file path (absolute or ~/...) of the audio to send"),
+			),
+			mcp.WithString("reply_to",
+				mcp.Description("message ID to reply to (optional)"),
+			),
+		),
+		m.handleSendVoiceNote,
+	)
+
 	// send document
 	m.server.AddTool(
 		mcp.NewTool("send_document",

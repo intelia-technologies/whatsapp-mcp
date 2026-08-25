@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -263,7 +265,9 @@ func (c *Client) SendTextMessage(ctx context.Context, chatJID string, text strin
 	}
 
 	// Add to recent messages cache for retry receipt handling
-	c.wa.DangerousInternals().AddRecentMessage(targetJID, resp.ID, msg, nil)
+	if err := c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, resp.ID, msg, nil); err != nil {
+		c.log.Warnf("Failed to cache recently sent message %s: %v", resp.ID, err)
+	}
 
 	c.store.SaveMessage(storage.Message{
 		ID:          resp.ID,
@@ -341,6 +345,18 @@ func (c *Client) readMediaSource(source string) ([]byte, string, error) {
 	return data, mimeType, nil
 }
 
+// mediaExecutable returns a common absolute path when LaunchAgents cannot see
+// Homebrew binaries, and otherwise falls back to PATH resolution.
+func mediaExecutable(name string) string {
+	for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return name
+}
+
 // convertGifToMp4 converts a GIF file to MP4 using ffmpeg.
 // Returns the MP4 data or an error if ffmpeg is not available or conversion fails.
 func convertGifToMp4(gifData []byte) ([]byte, error) {
@@ -357,16 +373,7 @@ func convertGifToMp4(gifData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to write temp gif: %w", err)
 	}
 
-	// Try common ffmpeg paths since LaunchAgents may have limited PATH
-	ffmpegPath := "ffmpeg"
-	for _, p := range []string{"/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"} {
-		if _, err := os.Stat(p); err == nil {
-			ffmpegPath = p
-			break
-		}
-	}
-
-	cmd := exec.Command(ffmpegPath, "-y", "-i", gifPath,
+	cmd := exec.Command(mediaExecutable("ffmpeg"), "-y", "-i", gifPath,
 		"-movflags", "faststart",
 		"-pix_fmt", "yuv420p",
 		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
@@ -376,6 +383,70 @@ func convertGifToMp4(gifData []byte) ([]byte, error) {
 	}
 
 	return os.ReadFile(mp4Path)
+}
+
+// convertAudioToVoiceNote transcodes arbitrary audio into the Ogg/Opus format
+// required by WhatsApp push-to-talk messages and returns its rounded duration.
+func convertAudioToVoiceNote(ctx context.Context, audioData []byte) ([]byte, uint32, error) {
+	const maxVoiceNoteSize = 16 * 1024 * 1024
+
+	tmpDir, err := os.MkdirTemp("", "wa-voice-*")
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	inputPath := filepath.Join(tmpDir, "input")
+	voicePath := filepath.Join(tmpDir, "voice.ogg")
+	if err := os.WriteFile(inputPath, audioData, 0600); err != nil {
+		return nil, 0, fmt.Errorf("failed to write temporary audio: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, mediaExecutable("ffmpeg"), "-y", "-i", inputPath,
+		"-vn",
+		"-c:a", "libopus",
+		"-application", "voip",
+		"-b:a", "32k",
+		"-vbr", "on",
+		"-compression_level", "10",
+		"-ac", "1",
+		"-ar", "48000",
+		"-f", "ogg",
+		voicePath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return nil, 0, fmt.Errorf("ffmpeg voice-note conversion failed: %w\n%s", err, string(output))
+	}
+
+	voiceData, err := os.ReadFile(voicePath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to read converted voice note: %w", err)
+	}
+	if len(voiceData) > maxVoiceNoteSize {
+		return nil, 0, fmt.Errorf("converted voice note is too large (max 16MB)")
+	}
+
+	durationOutput, err := exec.CommandContext(
+		ctx,
+		mediaExecutable("ffprobe"),
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		voicePath,
+	).CombinedOutput()
+	if err != nil {
+		return nil, 0, fmt.Errorf("ffprobe duration detection failed: %w\n%s", err, string(durationOutput))
+	}
+
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(durationOutput)), 64)
+	if err != nil || duration <= 0 {
+		return nil, 0, fmt.Errorf("invalid converted audio duration %q", strings.TrimSpace(string(durationOutput)))
+	}
+	seconds := uint32(math.Round(duration))
+	if seconds == 0 {
+		seconds = 1
+	}
+
+	return voiceData, seconds, nil
 }
 
 // SendImageMessage sends an image or GIF to a WhatsApp chat.
@@ -511,7 +582,9 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 	}
 
 	// Add to recent messages cache for retry receipt handling
-	c.wa.DangerousInternals().AddRecentMessage(targetJID, sendResp.ID, msg, nil)
+	if err := c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil); err != nil {
+		c.log.Warnf("Failed to cache recently sent message %s: %v", sendResp.ID, err)
+	}
 
 	c.log.Infof("Image sent successfully! ID=%s", sendResp.ID)
 	// Save to DB
@@ -604,7 +677,9 @@ func (c *Client) SendVideoMessage(ctx context.Context, chatJID string, videoSour
 	}
 
 	// Add to recent messages cache for retry receipt handling
-	c.wa.DangerousInternals().AddRecentMessage(targetJID, sendResp.ID, msg, nil)
+	if err := c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil); err != nil {
+		c.log.Warnf("Failed to cache recently sent message %s: %v", sendResp.ID, err)
+	}
 
 	c.log.Infof("Video sent successfully! ID=%s", sendResp.ID)
 	text := caption
@@ -630,6 +705,89 @@ func (c *Client) SendVideoMessage(ctx context.Context, chatJID string, videoSour
 		c.log.Warnf("Failed to marshal message proto for %s: %v", sendResp.ID, err)
 	}
 
+	return nil
+}
+
+// SendVoiceMessage converts an audio source to Ogg/Opus and sends it as a
+// WhatsApp push-to-talk voice note.
+func (c *Client) SendVoiceMessage(ctx context.Context, chatJID string, audioSource string, replyToID string) error {
+	c.log.Infof("SendVoiceMessage called: chatJID=%s, audioSource=%s", chatJID, audioSource)
+
+	targetJID, err := types.ParseJID(chatJID)
+	if err != nil {
+		return fmt.Errorf("invalid chat JID: %w", err)
+	}
+
+	audioData, _, err := c.readMediaSource(audioSource)
+	if err != nil {
+		return fmt.Errorf("failed to read audio: %w", err)
+	}
+
+	voiceData, duration, err := convertAudioToVoiceNote(ctx, audioData)
+	if err != nil {
+		return err
+	}
+
+	uploaded, err := c.wa.Upload(ctx, voiceData, whatsmeow.MediaAudio)
+	if err != nil {
+		return fmt.Errorf("failed to upload voice note: %w", err)
+	}
+
+	audioMsg := &waE2E.AudioMessage{
+		URL:           proto.String(uploaded.URL),
+		DirectPath:    proto.String(uploaded.DirectPath),
+		MediaKey:      uploaded.MediaKey,
+		FileEncSHA256: uploaded.FileEncSHA256,
+		FileSHA256:    uploaded.FileSHA256,
+		FileLength:    proto.Uint64(uint64(len(voiceData))),
+		Mimetype:      proto.String("audio/ogg; codecs=opus"),
+		Seconds:       proto.Uint32(duration),
+		PTT:           proto.Bool(true),
+	}
+	msg := &waE2E.Message{AudioMessage: audioMsg}
+
+	if replyToID != "" {
+		quotedMsg, err := c.store.GetMessageByID(replyToID)
+		if err != nil {
+			return fmt.Errorf("failed to look up quoted message: %w", err)
+		}
+		if quotedMsg == nil {
+			return fmt.Errorf("quoted message %s not found in database", replyToID)
+		}
+		audioMsg.ContextInfo = &waE2E.ContextInfo{
+			StanzaID:      proto.String(replyToID),
+			Participant:   proto.String(quotedMsg.SenderJID),
+			QuotedMessage: &waE2E.Message{Conversation: proto.String(quotedMsg.Text)},
+		}
+	}
+
+	sendResp, err := c.wa.SendMessage(ctx, targetJID, msg)
+	if err != nil {
+		return fmt.Errorf("failed to send voice note: %w", err)
+	}
+
+	if err := c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil); err != nil {
+		c.log.Warnf("Failed to cache recently sent message %s: %v", sendResp.ID, err)
+	}
+
+	c.store.SaveMessage(storage.Message{
+		ID:          sendResp.ID,
+		ChatJID:     chatJID,
+		SenderJID:   sendResp.Sender.String(),
+		Text:        "[Audio]",
+		Timestamp:   sendResp.Timestamp,
+		IsFromMe:    true,
+		MessageType: "ptt",
+		ReplyToID:   replyToID,
+	})
+
+	if protoBytes, err := proto.Marshal(msg); err == nil {
+		c.store.SaveMessageProto(sendResp.ID, protoBytes)
+	} else {
+		c.log.Warnf("Failed to marshal message proto for %s: %v", sendResp.ID, err)
+	}
+
+	c.log.Infof("Voice note sent successfully! ID=%s", sendResp.ID)
 	return nil
 }
 
@@ -983,7 +1141,9 @@ func (c *Client) SendDocumentMessage(ctx context.Context, chatJID string, fileSo
 		return fmt.Errorf("failed to send document: %w", err)
 	}
 
-	c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil)
+	if err := c.wa.DangerousInternals().AddRecentMessage(ctx, targetJID, sendResp.ID, msg, nil); err != nil {
+		c.log.Warnf("Failed to cache recently sent message %s: %v", sendResp.ID, err)
+	}
 
 	c.log.Infof("Document sent successfully! ID=%s", sendResp.ID)
 	text := caption

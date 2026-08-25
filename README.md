@@ -45,7 +45,7 @@ AI:  *reads context, sends reply* → "Sent! I've proposed Thursday at noon"
 
 This server implements the full MCP specification with:
 
-- **7 Tools** for WhatsApp operations
+- **20 Tools** for WhatsApp operations
 - **4 Prompts** for common workflows
 - **4 Resources** for interactive guides
 - **Server Instructions** for optimal AI interactions
@@ -57,10 +57,23 @@ This server implements the full MCP specification with:
 | `list_chats` | Browse conversations | Ordered by recent activity |
 | `get_chat_messages` | Read specific chat | Pagination, sender filtering |
 | `search_messages` | Search across all chats | Pattern matching, wildcards |
-| `find_chat` | Locate chat by name | Fuzzy search support |
-| `send_message` | Send WhatsApp messages | To any chat or group |
+| `find_chat` | Locate chat by name or JID | Fuzzy search support |
+| `send_message` | Send text messages | Optional quoted replies |
+| `send_image` | Send images and GIFs | Local files or URLs |
+| `send_video` | Send videos | Local files or URLs |
+| `send_voice_note` | Send audio as a voice note | Transcodes MP3, M4A, WAV, OGG, and similar formats to Ogg/Opus |
+| `send_document` | Send documents | Custom filename and caption |
+| `download_media` | Retry media downloads | One message or a pending batch |
 | `load_more_messages` | Fetch older history | On-demand from servers |
 | `get_my_info` | Get your profile info | JID, name, status, picture |
+| `create_community` | Create a community | Returns the new community JID |
+| `create_community_group` | Create a community group | Links it to its parent community |
+| `list_community_groups` | List community groups | Returns linked sub-groups |
+| `link_community_group` | Link an existing group | Adds it to a community |
+| `unlink_community_group` | Unlink a group | Removes it from a community |
+| `get_community_info` | Inspect a community | Participants and settings |
+| `get_profile_picture` | Get one profile picture | Contact or group |
+| `get_contact_profile_pictures` | Get profile pictures in batch | Multiple contacts or groups |
 
 #### Prompts
 
@@ -97,7 +110,7 @@ graph TB
         B -->|/mcp endpoint| C
         B -->|/health| B
 
-        C -->|Tools| C1[list_chats<br/>get_chat_messages<br/>search_messages<br/>find_chat<br/>send_message<br/>load_more_messages<br/>get_my_info]
+        C -->|Tools| C1[20 WhatsApp tools<br/>messages / media / communities / profiles]
         C -->|Prompts| C2[search_person_messages<br/>get_context_about_person<br/>analyze_conversation<br/>search_keyword]
         C -->|Resources| C3[Workflow Guides<br/>Search Patterns<br/>JID Format]
 
@@ -138,6 +151,7 @@ graph TB
 ### Prerequisites
 
 - **Go 1.25.5+** (for local setup) or **Docker** (recommended)
+- **ffmpeg and ffprobe** (required for GIF and voice-note transcoding; included in the Docker image)
 - **WhatsApp account** (will be linked via QR code)
 - **MCP-compatible AI client** (Claude, Cursor, etc.)
 
@@ -339,7 +353,6 @@ All data is stored in `./data/`:
 - [ ] **Enhanced Tools**
   - Mark messages as read
   - React to messages (emoji reactions)
-  - Send media files
   - Group management (create, members)
   - Status updates
   - Account management (profile picture, name)
