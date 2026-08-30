@@ -324,12 +324,19 @@ func (c *Client) waitForSocket() error {
 // local path: absolute, "~/"-relative, "file://" or relative to the process
 // working directory. A relative path that does not exist is rejected outright
 // instead of being handed to the HTTP client as if it were a hostname.
-func (c *Client) readMediaSource(source string) ([]byte, string, error) {
+//
+// ctx bounds the remote download so the caller's deadline wins over
+// mediaHTTPClient's own timeout.
+func (c *Client) readMediaSource(ctx context.Context, source string) ([]byte, string, error) {
 	const maxSize = 16 * 1024 * 1024
 
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		c.log.Infof("Downloading from URL: %s", source)
-		resp, err := mediaHTTPClient.Get(source)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to build request: %w", err)
+		}
+		resp, err := mediaHTTPClient.Do(req)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to download: %w", err)
 		}
@@ -374,6 +381,20 @@ func (c *Client) readMediaSource(source string) ([]byte, string, error) {
 		path = abs
 	}
 
+	// Stat before reading: a directory, a socket or a character device such as
+	// /dev/zero would otherwise be slurped into memory (or block forever)
+	// before the size check downstream ever ran.
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read local file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("%q is not a regular file", path)
+	}
+	if info.Size() > maxSize {
+		return nil, "", fmt.Errorf("file too large (max 16MB)")
+	}
+
 	c.log.Infof("Reading local file: %s", path)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -399,7 +420,8 @@ func mediaExecutable(name string) string {
 
 // convertGifToMp4 converts a GIF file to MP4 using ffmpeg.
 // Returns the MP4 data or an error if ffmpeg is not available or conversion fails.
-func convertGifToMp4(gifData []byte) ([]byte, error) {
+// ctx bounds the ffmpeg run so a stalled conversion cannot outlive the send.
+func convertGifToMp4(ctx context.Context, gifData []byte) ([]byte, error) {
 	tmpDir, err := os.MkdirTemp("", "wa-gif-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
@@ -413,7 +435,7 @@ func convertGifToMp4(gifData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to write temp gif: %w", err)
 	}
 
-	cmd := exec.Command(mediaExecutable("ffmpeg"), "-y", "-i", gifPath,
+	cmd := exec.CommandContext(ctx, mediaExecutable("ffmpeg"), "-y", "-i", gifPath,
 		"-movflags", "faststart",
 		"-pix_fmt", "yuv420p",
 		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
@@ -423,6 +445,34 @@ func convertGifToMp4(gifData []byte) ([]byte, error) {
 	}
 
 	return os.ReadFile(mp4Path)
+}
+
+// fetchMP4Fallback downloads the MP4 twin of a remote GIF (Giphy serves one).
+// The request carries ctx so the caller's deadline bounds it.
+func (c *Client) fetchMP4Fallback(ctx context.Context, mp4URL string, maxSize int) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mp4URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("invalid MP4 URL: %w", err)
+	}
+
+	resp, err := mediaHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxSize)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxSize {
+		return nil, fmt.Errorf("MP4 version too large (max %d bytes)", maxSize)
+	}
+	return data, nil
 }
 
 // convertAudioToVoiceNote transcodes arbitrary audio into the strict format
@@ -524,7 +574,7 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 		return fmt.Errorf("invalid chat JID: %w", err)
 	}
 
-	data, mimeType, err := c.readMediaSource(imageSource)
+	data, mimeType, err := c.readMediaSource(ctx, imageSource)
 	if err != nil {
 		return fmt.Errorf("failed to read image: %w", err)
 	}
@@ -539,17 +589,12 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 		mp4URL = strings.Replace(mp4URL, "rid=giphy.gif", "rid=giphy.mp4", 1)
 		if mp4URL != imageSource {
 			c.log.Infof("GIF detected, fetching MP4 version: %s", mp4URL)
-			mp4Resp, err := mediaHTTPClient.Get(mp4URL)
-			if err == nil && mp4Resp.StatusCode == http.StatusOK {
-				mp4Data, err := io.ReadAll(io.LimitReader(mp4Resp.Body, maxMediaSize+1))
-				mp4Resp.Body.Close()
-				if err == nil && len(mp4Data) <= maxMediaSize && len(mp4Data) > 0 {
-					data = mp4Data
-					mimeType = "video/mp4"
-					c.log.Infof("Using MP4 version (%d bytes)", len(data))
-				}
-			} else if mp4Resp != nil {
-				mp4Resp.Body.Close()
+			if mp4Data, mp4Err := c.fetchMP4Fallback(ctx, mp4URL, maxMediaSize); mp4Err != nil {
+				c.log.Warnf("GIF MP4 fallback failed: %v (falling back to ffmpeg)", mp4Err)
+			} else if len(mp4Data) > 0 {
+				data = mp4Data
+				mimeType = "video/mp4"
+				c.log.Infof("Using MP4 version (%d bytes)", len(data))
 			}
 		}
 	}
@@ -557,7 +602,7 @@ func (c *Client) SendImageMessage(ctx context.Context, chatJID string, imageSour
 	// For local GIFs (or URL GIFs where MP4 fetch failed), convert to MP4 with ffmpeg
 	if isGif && strings.Contains(mimeType, "gif") {
 		c.log.Infof("Converting GIF to MP4 with ffmpeg...")
-		mp4Data, err := convertGifToMp4(data)
+		mp4Data, err := convertGifToMp4(ctx, data)
 		if err != nil {
 			c.log.Warnf("ffmpeg GIF conversion failed: %v (sending raw GIF)", err)
 		} else {
@@ -703,7 +748,7 @@ func (c *Client) SendVideoMessage(ctx context.Context, chatJID string, videoSour
 		return fmt.Errorf("invalid chat JID: %w", err)
 	}
 
-	data, mimeType, err := c.readMediaSource(videoSource)
+	data, mimeType, err := c.readMediaSource(ctx, videoSource)
 	if err != nil {
 		return fmt.Errorf("failed to read video: %w", err)
 	}
@@ -805,7 +850,7 @@ func (c *Client) SendVoiceMessage(ctx context.Context, chatJID string, audioSour
 		return fmt.Errorf("invalid chat JID: %w", err)
 	}
 
-	audioData, _, err := c.readMediaSource(audioSource)
+	audioData, _, err := c.readMediaSource(ctx, audioSource)
 	if err != nil {
 		return fmt.Errorf("failed to read audio: %w", err)
 	}
@@ -1186,7 +1231,7 @@ func (c *Client) SendDocumentMessage(ctx context.Context, chatJID string, fileSo
 		return fmt.Errorf("invalid chat JID: %w", err)
 	}
 
-	data, mimeType, err := c.readMediaSource(fileSource)
+	data, mimeType, err := c.readMediaSource(ctx, fileSource)
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
