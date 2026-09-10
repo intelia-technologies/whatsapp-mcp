@@ -642,8 +642,9 @@ func (m *MCPServer) handleLoadMoreMessages(ctx context.Context, request mcp.Call
 				sender = "You"
 			}
 
-			fmt.Fprintf(&result, "[%s] %s %s: %s\n",
+			fmt.Fprintf(&result, "[%s id:%s] %s %s: %s\n",
 				m.formatTime(msg.Timestamp),
+				msg.ID,
 				direction,
 				sender,
 				msg.Text)
