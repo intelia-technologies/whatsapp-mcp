@@ -59,6 +59,7 @@ This server implements the full MCP specification with:
 | `search_messages` | Search across all chats | Pattern matching, wildcards |
 | `find_chat` | Locate chat by name | Fuzzy search support |
 | `send_message` | Send WhatsApp messages | To any chat or group |
+| `send_reaction` | React to a message with an emoji | Native reaction on the bubble; empty emoji removes it |
 | `load_more_messages` | Fetch older history | On-demand from servers |
 | `get_my_info` | Get your profile info | JID, name, status, picture |
 
@@ -97,7 +98,7 @@ graph TB
         B -->|/mcp endpoint| C
         B -->|/health| B
 
-        C -->|Tools| C1[list_chats<br/>get_chat_messages<br/>search_messages<br/>find_chat<br/>send_message<br/>load_more_messages<br/>get_my_info]
+        C -->|Tools| C1[list_chats<br/>get_chat_messages<br/>search_messages<br/>find_chat<br/>send_message<br/>send_reaction<br/>load_more_messages<br/>get_my_info]
         C -->|Prompts| C2[search_person_messages<br/>get_context_about_person<br/>analyze_conversation<br/>search_keyword]
         C -->|Resources| C3[Workflow Guides<br/>Search Patterns<br/>JID Format]
 
@@ -320,6 +321,7 @@ All data is stored in `./data/`:
 - [x] Timezone support
 - [x] On-demand message loading from servers
 - [x] Docker deployment (with healthcheck!)
+- [x] Emoji reactions on messages (`send_reaction`)
 
 ### 🚧 Planned
 
@@ -338,7 +340,6 @@ All data is stored in `./data/`:
 
 - [ ] **Enhanced Tools**
   - Mark messages as read
-  - React to messages (emoji reactions)
   - Send media files
   - Group management (create, members)
   - Status updates

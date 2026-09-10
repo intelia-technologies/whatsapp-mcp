@@ -220,6 +220,110 @@ func (c *Client) SendTextMessage(ctx context.Context, chatJID string, text strin
 	return nil
 }
 
+// parseAddressableJID parses a JID that must address a chat or a user.
+// types.ParseJID accepts a bare string as a server-only JID, so "not a jid"
+// would parse cleanly and then be sent nowhere; requiring the user@server
+// shape turns that into an error the caller can read.
+func parseAddressableJID(jid string) (types.JID, error) {
+	parsed, err := types.ParseJID(jid)
+	if err != nil {
+		return types.EmptyJID, err
+	}
+	if parsed.User == "" || parsed.Server == "" {
+		return types.EmptyJID, fmt.Errorf("expected a JID of the form user@server")
+	}
+	return parsed, nil
+}
+
+// resolveReactionTarget works out which chat a reaction goes to and which
+// participant owns the message it hangs off.
+//
+// stored is the target message as the local history knows it, or nil when it
+// predates that history; chatJID and senderJID are caller overrides. The
+// returned sender is EmptyJID for our own messages, which is how
+// BuildMessageKey encodes "from me" — passing our own JID instead would be
+// equivalent, but keeping it empty also covers DMs, where the participant is
+// implicit.
+func resolveReactionTarget(stored *storage.Message, messageID string, chatJID string, senderJID string) (types.JID, types.JID, error) {
+	if messageID == "" {
+		return types.EmptyJID, types.EmptyJID, fmt.Errorf("message id is required")
+	}
+
+	if stored != nil {
+		if chatJID == "" {
+			chatJID = stored.ChatJID
+		}
+		if senderJID == "" && !stored.IsFromMe {
+			senderJID = stored.SenderJID
+		}
+	}
+	if chatJID == "" {
+		return types.EmptyJID, types.EmptyJID, fmt.Errorf("message %s is not in the local history: pass chat_jid explicitly", messageID)
+	}
+
+	targetJID, err := parseAddressableJID(chatJID)
+	if err != nil {
+		return types.EmptyJID, types.EmptyJID, fmt.Errorf("invalid chat JID %q: %w", chatJID, err)
+	}
+
+	sender := types.EmptyJID
+	if senderJID != "" {
+		sender, err = parseAddressableJID(senderJID)
+		if err != nil {
+			return types.EmptyJID, types.EmptyJID, fmt.Errorf("invalid sender JID %q: %w", senderJID, err)
+		}
+	}
+
+	return targetJID, sender, nil
+}
+
+// SendReaction attaches an emoji reaction to an existing message, the same way
+// press-and-hold on a bubble does in the app. Passing an empty emoji removes a
+// reaction this account sent earlier.
+//
+// chatJID and senderJID are resolved from the local message store when the
+// target message is known there, which is the case for anything this daemon
+// has seen. They only need to be supplied explicitly for a message that is
+// older than the local history.
+func (c *Client) SendReaction(ctx context.Context, chatJID string, messageID string, emoji string, senderJID string) error {
+	var stored *storage.Message
+	if messageID != "" {
+		var err error
+		stored, err = c.store.GetMessageByID(messageID)
+		if err != nil {
+			return fmt.Errorf("failed to look up target message: %w", err)
+		}
+	}
+
+	targetJID, sender, err := resolveReactionTarget(stored, messageID, chatJID, senderJID)
+	if err != nil {
+		return err
+	}
+	chatJID = targetJID.String()
+
+	msg := c.wa.BuildReaction(targetJID, sender, messageID, emoji)
+
+	resp, err := c.wa.SendMessage(ctx, targetJID, msg)
+	if err != nil {
+		return err
+	}
+
+	// Persist it the same shape as an incoming reaction: emoji as text, type
+	// "reaction" and reply_to_id pointing at the message it hangs off.
+	c.store.SaveMessage(storage.Message{
+		ID:          resp.ID,
+		ChatJID:     chatJID,
+		SenderJID:   resp.Sender.String(),
+		Text:        emoji,
+		Timestamp:   resp.Timestamp,
+		IsFromMe:    true,
+		MessageType: "reaction",
+		ReplyToID:   messageID,
+	})
+
+	return nil
+}
+
 // RequestHistorySync requests additional message history from WhatsApp.
 // If waitForSync is true, it blocks until the sync completes and returns the new messages.
 func (c *Client) RequestHistorySync(ctx context.Context, chatJID string, count int, waitForSync bool) ([]storage.MessageWithNames, error) {

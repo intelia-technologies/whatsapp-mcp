@@ -356,6 +356,18 @@ list_chats(limit=50)
 - Sending a WhatsApp message
 - (Always use find_chat first to get JID!)
 
+### When to use send_reaction
+- Acknowledging a message with an emoji instead of writing a new one
+- The emoji sticks to the target bubble; it is NOT a new message or a quoted reply
+- Needs the message_id shown as ` + "`id:...`" + ` by get_chat_messages / search_messages
+- Pass an empty emoji to take your reaction back
+
+` + "```" + `
+get_chat_messages(chat_jid="120363123456789@g.us", limit=20)
+  -> [09:12 id:3EB0ABC123] ← Maria: can you cover Sunday?
+send_reaction(message_id="3EB0ABC123", emoji="👍")
+` + "```" + `
+
 ### When to use load_more_messages
 - Need older messages not yet in database
 - Building complete conversation history

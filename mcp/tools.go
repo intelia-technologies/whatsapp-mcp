@@ -89,6 +89,28 @@ func (m *MCPServer) registerTools() {
 		m.handleSendMessage,
 	)
 
+	// send reaction
+	m.server.AddTool(
+		mcp.NewTool("send_reaction",
+			mcp.WithDescription("React to a WhatsApp message with an emoji. The emoji is attached to the target message bubble itself (native reaction), not sent as a new message or a quoted reply. Send an empty emoji to remove a reaction you added before."),
+			mcp.WithString("message_id",
+				mcp.Required(),
+				mcp.Description("ID of the message to react to (from get_chat_messages or search_messages)"),
+			),
+			mcp.WithString("emoji",
+				mcp.Required(),
+				mcp.Description("emoji to attach, e.g. 👍, 🍻, 👌. Use an empty string to remove your reaction"),
+			),
+			mcp.WithString("chat_jid",
+				mcp.Description("chat JID of the message (optional: resolved from local history, only needed for messages older than it)"),
+			),
+			mcp.WithString("sender_jid",
+				mcp.Description("sender JID of the target message (optional: resolved from local history; needed with chat_jid for group messages outside it)"),
+			),
+		),
+		m.handleSendReaction,
+	)
+
 	// 6. load more messages on-demand
 	m.server.AddTool(
 		mcp.NewTool("load_more_messages",
