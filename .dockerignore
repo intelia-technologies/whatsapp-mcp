@@ -1,0 +1,17 @@
+.git
+.gitignore
+
+# Runtime state: bind-mounted at ./data:/app/data by docker-compose.
+# Copying it into the image is pointless and dragged 2.8GB into the build cache.
+data/
+
+# Logs
+*.log
+
+# Locally compiled binary (rebuilt inside the Alpine builder stage)
+whatsapp-mcp
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+.idea/
