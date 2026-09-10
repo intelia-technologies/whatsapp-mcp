@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"whatsapp-mcp/storage"
 
@@ -236,8 +238,11 @@ func (m *MCPServer) handleGetChatMessages(ctx context.Context, request mcp.CallT
 			sender = "You"
 		}
 
-		fmt.Fprintf(&result, "[%s] %s %s: %s\n",
+		// The ID travels inline because send_reaction and reply_to take it, and
+		// there is no other tool that surfaces it.
+		fmt.Fprintf(&result, "[%s id:%s] %s %s: %s\n",
 			m.formatTime(msg.Timestamp),
+			msg.ID,
 			direction,
 			sender,
 			msg.Text)
@@ -323,9 +328,10 @@ func (m *MCPServer) handleSearchMessages(ctx context.Context, request mcp.CallTo
 			sender = "You"
 		}
 
-		fmt.Fprintf(&result, "%d. [%s] %s in chat %s:\n",
+		fmt.Fprintf(&result, "%d. [%s id:%s] %s in chat %s:\n",
 			i+1,
 			m.formatDateTime(msg.Timestamp),
+			msg.ID,
 			sender,
 			msg.ChatJID)
 		fmt.Fprintf(&result, "   %s\n", msg.Text)
@@ -438,6 +444,71 @@ func (m *MCPServer) handleSendMessage(ctx context.Context, request mcp.CallToolR
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Message sent successfully to %s", chatJID)), nil
+}
+
+// maxReactionRunes bounds a reaction payload. Real emoji reach about a dozen
+// code points once ZWJ sequences, skin tones and variation selectors are
+// counted, so anything longer is a sentence, not a reaction.
+const maxReactionRunes = 16
+
+// validateReaction rejects payloads that WhatsApp would accept on the wire but
+// no client renders. The reaction field is free text, so "ok" or ":)" would
+// travel fine and then show up as an unreadable badge on the bubble. Every
+// emoji carries at least one non-ASCII code point, including keycaps such as
+// "1️⃣", so requiring one keeps those working while blocking plain text.
+func validateReaction(emoji string) error {
+	if emoji == "" {
+		return nil // empty removes a reaction sent earlier
+	}
+
+	if utf8.RuneCountInString(emoji) > maxReactionRunes {
+		return fmt.Errorf("reaction %q is too long: expected a single emoji", emoji)
+	}
+
+	for _, r := range emoji {
+		if r > unicode.MaxASCII {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("reaction %q is not an emoji: WhatsApp only renders emoji reactions", emoji)
+}
+
+// handleSendReaction handles the send_reaction tool request.
+func (m *MCPServer) handleSendReaction(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	messageID, err := request.RequireString("message_id")
+	if err != nil {
+		return mcp.NewToolResultError("message_id parameter is required"), nil
+	}
+
+	// Required but allowed to be empty: an empty reaction is how WhatsApp
+	// removes one, so a missing argument and "" must stay distinguishable.
+	emoji, err := request.RequireString("emoji")
+	if err != nil {
+		return mcp.NewToolResultError("emoji parameter is required (pass an empty string to remove a reaction)"), nil
+	}
+	emoji = strings.TrimSpace(emoji)
+
+	if err := validateReaction(emoji); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if !m.wa.IsLoggedIn() {
+		return mcp.NewToolResultError("WhatsApp is not connected"), nil
+	}
+
+	chatJID := request.GetString("chat_jid", "")
+	senderJID := request.GetString("sender_jid", "")
+
+	if err := m.wa.SendReaction(ctx, chatJID, messageID, emoji, senderJID); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to send reaction: %v", err)), nil
+	}
+
+	if emoji == "" {
+		return mcp.NewToolResultText(fmt.Sprintf("Reaction removed from message %s", messageID)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Reacted with %s to message %s", emoji, messageID)), nil
 }
 
 // handleSendImage handles the send_image tool request.

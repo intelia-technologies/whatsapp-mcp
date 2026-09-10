@@ -63,6 +63,7 @@ This server implements the full MCP specification with:
 | `send_video` | Send videos | Local files or URLs |
 | `send_voice_note` | Send audio as a voice note | Transcodes MP3, M4A, WAV, OGG, and similar formats to Ogg/Opus |
 | `send_document` | Send documents | Custom filename and caption |
+| `send_reaction` | React to a message with an emoji | Native reaction on the bubble; empty emoji removes it |
 | `download_media` | Retry media downloads | One message or a pending batch |
 | `load_more_messages` | Fetch older history | On-demand from servers |
 | `get_my_info` | Get your profile info | JID, name, status, picture |
@@ -334,6 +335,7 @@ All data is stored in `./data/`:
 - [x] Timezone support
 - [x] On-demand message loading from servers
 - [x] Docker deployment (with healthcheck!)
+- [x] Emoji reactions on messages (`send_reaction`)
 
 ### 🚧 Planned
 
@@ -352,7 +354,6 @@ All data is stored in `./data/`:
 
 - [ ] **Enhanced Tools**
   - Mark messages as read
-  - React to messages (emoji reactions)
   - Group management (create, members)
   - Status updates
   - Account management (profile picture, name)
