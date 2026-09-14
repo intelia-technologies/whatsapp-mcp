@@ -285,36 +285,69 @@ func (s *MessageStore) GetContactChats(jid string, limit int) ([]Chat, error) {
 	return chats, rows.Err()
 }
 
-// GetDirectChatByContact searches for a 1-on-1 direct chat by phone number or contact name (excluding groups).
-func (s *MessageStore) GetDirectChatByContact(queryStr string) (*Chat, error) {
+// FindDirectChatsByContact searches 1-on-1 chats (groups excluded) by phone
+// number or contact name, best match first.
+//
+// It returns every candidate instead of a single best guess on purpose. The
+// substring search behind it is ambiguous by nature -- "Juan" matches six
+// chats in a real database -- and callers feed the result into send_message.
+// Silently picking the most recent match would eventually send a private
+// message to the wrong person, with no way to notice before it happened.
+func (s *MessageStore) FindDirectChatsByContact(queryStr string, limit int) ([]Chat, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
 	clean := strings.TrimPrefix(strings.TrimSpace(queryStr), "+")
 	pattern := "%" + clean + "%"
+	lowered := strings.ToLower(clean)
+	phonePrefix := clean + "@%"
 
+	// Rank exact identity matches above substring hits so that passing a full
+	// JID or a complete phone number still resolves to one obvious answer.
 	query := `
 	SELECT jid, COALESCE(push_name, ''), COALESCE(contact_name, ''), last_message_time, unread_count, is_group
 	FROM chats
 	WHERE is_group = 0 AND (jid LIKE ? OR push_name LIKE ? OR contact_name LIKE ?)
-	ORDER BY last_message_time DESC
-	LIMIT 1
+	ORDER BY
+		CASE
+			WHEN jid = ? OR jid LIKE ? THEN 0
+			WHEN lower(COALESCE(contact_name, '')) = ? OR lower(COALESCE(push_name, '')) = ? THEN 1
+			ELSE 2
+		END,
+		last_message_time DESC
+	LIMIT ?
 	`
-	row := s.db.QueryRow(query, pattern, pattern, pattern)
-
-	var chat Chat
-	var lastMsgUnix int64
-	err := row.Scan(
-		&chat.JID,
-		&chat.PushName,
-		&chat.ContactName,
-		&lastMsgUnix,
-		&chat.UnreadCount,
-		&chat.IsGroup,
+	rows, err := s.db.Query(query,
+		pattern, pattern, pattern,
+		clean, phonePrefix,
+		lowered, lowered,
+		limit,
 	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
 	}
-	chat.LastMessageTime = time.Unix(lastMsgUnix, 0)
-	return &chat, nil
+	defer rows.Close()
+
+	var chats []Chat
+	for rows.Next() {
+		var chat Chat
+		var lastMsgUnix int64
+		if err := rows.Scan(
+			&chat.JID,
+			&chat.PushName,
+			&chat.ContactName,
+			&lastMsgUnix,
+			&chat.UnreadCount,
+			&chat.IsGroup,
+		); err != nil {
+			return nil, err
+		}
+		chat.LastMessageTime = time.Unix(lastMsgUnix, 0)
+		chats = append(chats, chat)
+	}
+	return chats, rows.Err()
 }

@@ -404,7 +404,7 @@ func (m *MCPServer) registerTools() {
 	// get_direct_chat_by_contact
 	m.server.AddTool(
 		mcp.NewTool("get_direct_chat_by_contact",
-			mcp.WithDescription("Find the 1-on-1 direct chat (excluding groups) for a contact by phone number or name."),
+			mcp.WithDescription("Find the 1-on-1 direct chat (excluding groups) for a contact by phone number or name. A name can match several people; when it does, every candidate is returned and the caller must confirm which one is meant before sending anything."),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("phone number or contact name to search for"),

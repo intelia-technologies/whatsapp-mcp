@@ -1255,18 +1255,35 @@ func (m *MCPServer) handleGetDirectChatByContact(ctx context.Context, request mc
 		return mcp.NewToolResultError("query parameter is required"), nil
 	}
 
-	chat, err := m.store.GetDirectChatByContact(query)
+	chats, err := m.store.FindDirectChatsByContact(query, 10)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to find direct chat: %v", err)), nil
 	}
-	if chat == nil {
+	if len(chats) == 0 {
 		return mcp.NewToolResultText(fmt.Sprintf("No 1-on-1 direct chat found matching '%s'", query)), nil
 	}
 
-	displayName := getDisplayName(*chat)
 	var result strings.Builder
+
+	// An ambiguous name must never collapse to one silent winner: the JID this
+	// returns is what gets passed to send_message.
+	if len(chats) > 1 {
+		fmt.Fprintf(&result, "AMBIGUOUS: %d direct chats match '%s'. Confirm which one is meant before sending anything -- do not assume the first.\n\n",
+			len(chats), query)
+		for i, chat := range chats {
+			fmt.Fprintf(&result, "%d. %s\n", i+1, getDisplayName(chat))
+			fmt.Fprintf(&result, "   JID: %s\n", chat.JID)
+			if chat.ContactName != "" && chat.PushName != "" && chat.ContactName != chat.PushName {
+				fmt.Fprintf(&result, "   (Contact: %s, Push: %s)\n", chat.ContactName, chat.PushName)
+			}
+			fmt.Fprintf(&result, "   Last message: %s\n\n", m.formatDateTime(chat.LastMessageTime))
+		}
+		return mcp.NewToolResultText(result.String()), nil
+	}
+
+	chat := chats[0]
 	fmt.Fprintf(&result, "Direct Chat Found:\n")
-	fmt.Fprintf(&result, "   Name: %s\n", displayName)
+	fmt.Fprintf(&result, "   Name: %s\n", getDisplayName(chat))
 	fmt.Fprintf(&result, "   JID: %s\n", chat.JID)
 	if chat.ContactName != "" && chat.PushName != "" && chat.ContactName != chat.PushName {
 		fmt.Fprintf(&result, "   (Contact: %s, Push: %s)\n", chat.ContactName, chat.PushName)
