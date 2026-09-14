@@ -186,33 +186,142 @@ func TestMessageContextAndInteractions(t *testing.T) {
 		}
 	})
 
-	t.Run("GetDirectChatByContact", func(t *testing.T) {
+	t.Run("FindDirectChatsByContact", func(t *testing.T) {
 		// By phone number
-		chat, err := store.GetDirectChatByContact("34636513587")
+		byPhone, err := store.FindDirectChatsByContact("34636513587", 10)
 		if err != nil {
-			t.Fatalf("GetDirectChatByContact by phone failed: %v", err)
+			t.Fatalf("FindDirectChatsByContact by phone failed: %v", err)
 		}
-		if chat == nil || chat.JID != "34636513587@s.whatsapp.net" {
-			t.Errorf("expected David direct chat, got %+v", chat)
+		if len(byPhone) != 1 || byPhone[0].JID != "34636513587@s.whatsapp.net" {
+			t.Errorf("expected only David direct chat, got %+v", byPhone)
 		}
 
 		// By name
-		chatByName, err := store.GetDirectChatByContact("David Contact")
+		byName, err := store.FindDirectChatsByContact("David Contact", 10)
 		if err != nil {
-			t.Fatalf("GetDirectChatByContact by contact name failed: %v", err)
+			t.Fatalf("FindDirectChatsByContact by contact name failed: %v", err)
 		}
-		if chatByName == nil || chatByName.JID != "34636513587@s.whatsapp.net" {
-			t.Errorf("expected David direct chat, got %+v", chatByName)
+		if len(byName) != 1 || byName[0].JID != "34636513587@s.whatsapp.net" {
+			t.Errorf("expected only David direct chat, got %+v", byName)
 		}
 
 		// Group name should NOT match
-		chatGroupMatch, err := store.GetDirectChatByContact("David Group")
+		groupMatch, err := store.FindDirectChatsByContact("David Group", 10)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// Shouldn't return the group chat even if name contains David
-		if chatGroupMatch != nil && chatGroupMatch.IsGroup {
-			t.Errorf("expected non-group chat or nil, got group chat: %+v", chatGroupMatch)
+		for _, chat := range groupMatch {
+			if chat.IsGroup {
+				t.Errorf("expected no group chat, got %+v", chat)
+			}
 		}
 	})
+}
+
+// A name that matches several people must surface all of them. Returning the
+// most recent one alone is how a private message reaches the wrong person.
+func TestFindDirectChatsByContactReportsEveryNamesake(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	now := time.Now().Truncate(time.Second)
+	namesakes := []struct {
+		jid         string
+		contactName string
+		offset      time.Duration
+	}{
+		{"34600000001@s.whatsapp.net", "Juan Perez", -30 * time.Minute},
+		{"34600000002@s.whatsapp.net", "Juan Gomez", -10 * time.Minute},
+		{"34600000003@s.whatsapp.net", "Juanita Lopez", -50 * time.Minute},
+		{"34600000004@s.whatsapp.net", "Marta Ruiz", -5 * time.Minute},
+	}
+	for _, c := range namesakes {
+		if _, err := db.Exec(`
+			INSERT INTO chats (jid, push_name, contact_name, last_message_time, is_group)
+			VALUES (?, '', ?, ?, 0)
+		`, c.jid, c.contactName, now.Add(c.offset).Unix()); err != nil {
+			t.Fatalf("failed to insert chat: %v", err)
+		}
+	}
+
+	matches, err := store.FindDirectChatsByContact("Juan", 10)
+	if err != nil {
+		t.Fatalf("FindDirectChatsByContact failed: %v", err)
+	}
+	if len(matches) != 3 {
+		t.Fatalf("expected all 3 chats matching 'Juan', got %d: %+v", len(matches), matches)
+	}
+
+	// An exact name must still resolve to one obvious answer, ranked first.
+	exact, err := store.FindDirectChatsByContact("Juan Perez", 10)
+	if err != nil {
+		t.Fatalf("FindDirectChatsByContact exact failed: %v", err)
+	}
+	if len(exact) != 1 || exact[0].JID != "34600000001@s.whatsapp.net" {
+		t.Errorf("expected only Juan Perez, got %+v", exact)
+	}
+
+	// A full phone number outranks a more recent substring match.
+	byPhone, err := store.FindDirectChatsByContact("+34600000001", 10)
+	if err != nil {
+		t.Fatalf("FindDirectChatsByContact by phone failed: %v", err)
+	}
+	if len(byPhone) == 0 || byPhone[0].JID != "34600000001@s.whatsapp.net" {
+		t.Errorf("expected the exact phone match ranked first, got %+v", byPhone)
+	}
+}
+
+// WhatsApp timestamps have one-second precision and bursts of messages share a
+// second routinely. A strict < / > split on timestamp alone drops those
+// neighbours from the context without reporting anything.
+func TestGetMessageContextKeepsSameSecondMessages(t *testing.T) {
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	chatJID := "34611111111@s.whatsapp.net"
+	if _, err := db.Exec(`
+		INSERT INTO chats (jid, push_name, contact_name, last_message_time, is_group)
+		VALUES (?, 'Burst', 'Burst', ?, 0)
+	`, chatJID, time.Now().Unix()); err != nil {
+		t.Fatalf("failed to insert chat: %v", err)
+	}
+
+	// Five messages fired inside the same second, the middle one is the target.
+	burst := time.Now().Truncate(time.Second).Add(-time.Hour)
+	ids := []string{"b1", "b2", "b3", "b4", "b5"}
+	for i, id := range ids {
+		if _, err := db.Exec(`
+			INSERT INTO messages (id, chat_jid, sender_jid, text, timestamp, is_from_me, message_type, created_at)
+			VALUES (?, ?, ?, ?, ?, 0, 'text', ?)
+		`, id, chatJID, chatJID, "burst "+id, burst.Unix(),
+			burst.Add(time.Duration(i)*time.Second).Format("2006-01-02 15:04:05")); err != nil {
+			t.Fatalf("failed to insert message: %v", err)
+		}
+	}
+
+	msgCtx, err := store.GetMessageContext("b3", 5, 5)
+	if err != nil {
+		t.Fatalf("GetMessageContext failed: %v", err)
+	}
+	if msgCtx == nil {
+		t.Fatal("expected context for b3, got nil")
+	}
+
+	if len(msgCtx.Before) != 2 {
+		t.Errorf("expected b1 and b2 before the target, got %d: %+v", len(msgCtx.Before), msgCtx.Before)
+	}
+	if len(msgCtx.After) != 2 {
+		t.Errorf("expected b4 and b5 after the target, got %d: %+v", len(msgCtx.After), msgCtx.After)
+	}
+
+	// Every message must appear exactly once across before/target/after.
+	seen := map[string]int{msgCtx.Target.ID: 1}
+	for _, m := range append(append([]MessageWithNames{}, msgCtx.Before...), msgCtx.After...) {
+		seen[m.ID]++
+	}
+	for _, id := range ids {
+		if seen[id] != 1 {
+			t.Errorf("message %s appears %d times in the context, want exactly 1", id, seen[id])
+		}
+	}
 }

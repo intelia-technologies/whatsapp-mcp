@@ -622,6 +622,25 @@ func (s *MessageStore) GetMessageWithNamesByID(messageID string) (*MessageWithNa
 	return &msgs[0], nil
 }
 
+// messageCreatedAt returns the row's insertion timestamp, used to break ties
+// between messages that share the same one-second WhatsApp timestamp. Rows
+// written before the column existed report an empty string, which still orders
+// deterministically.
+func (s *MessageStore) messageCreatedAt(messageID string) (string, error) {
+	var createdAt string
+	err := s.db.QueryRow(
+		`SELECT COALESCE(created_at, '') FROM messages WHERE id = ?`,
+		messageID,
+	).Scan(&createdAt)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return createdAt, nil
+}
+
 // GetMessageContext retrieves a target message along with N messages before and N messages after in the same chat.
 func (s *MessageStore) GetMessageContext(messageID string, before int, after int) (*MessageContext, error) {
 	target, err := s.GetMessageWithNamesByID(messageID)
@@ -645,11 +664,23 @@ func (s *MessageStore) GetMessageContext(messageID string, before int, after int
 		after = 50
 	}
 
+	// timestamp alone cannot split the chat around the target: WhatsApp stores
+	// it with one-second precision and bursts of messages routinely share a
+	// second, so a strict < / > comparison silently drops every message sent in
+	// the same second as the target -- 2% of this database. Falling back to
+	// created_at (insertion order) and then the unique id gives a total order,
+	// so every message lands on exactly one side of the split.
+	createdAt, err := s.messageCreatedAt(messageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get target ordering key: %w", err)
+	}
+	targetUnix := target.Timestamp.Unix()
+
 	msgCtx := &MessageContext{
 		Target: *target,
 	}
 
-	// Fetch messages before (timestamp < target.Timestamp, ordered DESC, then reversed to chronological)
+	// Fetch messages before (ordered DESC, then reversed to chronological)
 	if before > 0 {
 		queryBefore := `
 		SELECT id, chat_jid, sender_jid, sender_push_name, sender_contact_name, chat_name,
@@ -658,11 +689,11 @@ func (s *MessageStore) GetMessageContext(messageID string, before int, after int
 		       media_width, media_height, media_duration, media_download_status,
 		       media_download_timestamp, media_download_error
 		FROM messages_with_names
-		WHERE chat_jid = ? AND timestamp < ?
-		ORDER BY timestamp DESC
+		WHERE chat_jid = ? AND (timestamp, COALESCE(created_at, ''), id) < (?, ?, ?)
+		ORDER BY timestamp DESC, COALESCE(created_at, '') DESC, id DESC
 		LIMIT ?
 		`
-		rows, err := s.db.Query(queryBefore, target.ChatJID, target.Timestamp.Unix(), before)
+		rows, err := s.db.Query(queryBefore, target.ChatJID, targetUnix, createdAt, messageID, before)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get before messages: %w", err)
 		}
@@ -679,7 +710,7 @@ func (s *MessageStore) GetMessageContext(messageID string, before int, after int
 		msgCtx.Before = beforeMsgs
 	}
 
-	// Fetch messages after (timestamp > target.Timestamp, ordered ASC)
+	// Fetch messages after (ordered ASC)
 	if after > 0 {
 		queryAfter := `
 		SELECT id, chat_jid, sender_jid, sender_push_name, sender_contact_name, chat_name,
@@ -688,11 +719,11 @@ func (s *MessageStore) GetMessageContext(messageID string, before int, after int
 		       media_width, media_height, media_duration, media_download_status,
 		       media_download_timestamp, media_download_error
 		FROM messages_with_names
-		WHERE chat_jid = ? AND timestamp > ?
-		ORDER BY timestamp ASC
+		WHERE chat_jid = ? AND (timestamp, COALESCE(created_at, ''), id) > (?, ?, ?)
+		ORDER BY timestamp ASC, COALESCE(created_at, '') ASC, id ASC
 		LIMIT ?
 		`
-		rows, err := s.db.Query(queryAfter, target.ChatJID, target.Timestamp.Unix(), after)
+		rows, err := s.db.Query(queryAfter, target.ChatJID, targetUnix, createdAt, messageID, after)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get after messages: %w", err)
 		}
