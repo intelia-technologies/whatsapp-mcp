@@ -1088,3 +1088,190 @@ func (m *MCPServer) handleSendDocument(ctx context.Context, request mcp.CallTool
 
 	return mcp.NewToolResultText(fmt.Sprintf("Document sent successfully to %s", chatJID)), nil
 }
+
+// formatMessageItem formats a single message for display in results.
+func (m *MCPServer) formatMessageItem(sb *strings.Builder, msg storage.MessageWithNames, showChat bool) {
+	direction := "←"
+	sender := getSenderDisplayName(msg)
+	if msg.IsFromMe {
+		direction = "→"
+		sender = "You"
+	}
+
+	chatPrefix := ""
+	if showChat && msg.ChatName != "" {
+		chatPrefix = fmt.Sprintf("[%s] ", msg.ChatName)
+	}
+
+	fmt.Fprintf(sb, "%s[%s id:%s] %s %s: %s\n",
+		chatPrefix,
+		m.formatDateTime(msg.Timestamp),
+		msg.ID,
+		direction,
+		sender,
+		msg.Text)
+
+	if msg.MediaMetadata != nil {
+		meta := msg.MediaMetadata
+		fmt.Fprintf(sb, "   📎 %s (%s, %s)",
+			meta.FileName, meta.MimeType, formatFileSize(meta.FileSize))
+
+		if dims := formatDimensions(meta.Width, meta.Height); dims != "" {
+			fmt.Fprintf(sb, ", %s", dims)
+		}
+
+		if dur := formatDuration(meta.Duration); dur != "" {
+			fmt.Fprintf(sb, ", %s", dur)
+		}
+
+		switch meta.DownloadStatus {
+		case "downloaded":
+			sb.WriteString(" [Downloaded]")
+			fmt.Fprintf(sb, "\n   Resource: whatsapp://media/%s", msg.ID)
+		case "pending":
+			sb.WriteString(" [Not downloaded]")
+		case "failed":
+			sb.WriteString(" [Download failed]")
+		case "expired":
+			sb.WriteString(" [Expired]")
+		}
+		sb.WriteString("\n")
+	}
+}
+
+// handleGetMessageContext handles the get_message_context tool request.
+func (m *MCPServer) handleGetMessageContext(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	messageID, err := request.RequireString("message_id")
+	if err != nil {
+		return mcp.NewToolResultError("message_id parameter is required"), nil
+	}
+
+	before := int(request.GetFloat("before", 5.0))
+	after := int(request.GetFloat("after", 5.0))
+	if before > 20 {
+		before = 20
+	}
+	if after > 20 {
+		after = 20
+	}
+
+	msgCtx, err := m.store.GetMessageContext(messageID, before, after)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to get message context: %v", err)), nil
+	}
+	if msgCtx == nil {
+		return mcp.NewToolResultError(fmt.Sprintf("message with ID '%s' not found", messageID)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Context for message in chat '%s' (%s):\n\n", msgCtx.Target.ChatName, msgCtx.Target.ChatJID)
+
+	if len(msgCtx.Before) > 0 {
+		result.WriteString("--- Prior messages ---\n")
+		for _, msg := range msgCtx.Before {
+			m.formatMessageItem(&result, msg, false)
+		}
+		result.WriteString("\n")
+	}
+
+	result.WriteString(">>> TARGET MESSAGE >>>\n")
+	m.formatMessageItem(&result, msgCtx.Target, false)
+	result.WriteString("<<<<<<<<<<<<<<<<<<<<<<\n\n")
+
+	if len(msgCtx.After) > 0 {
+		result.WriteString("--- Subsequent messages ---\n")
+		for _, msg := range msgCtx.After {
+			m.formatMessageItem(&result, msg, false)
+		}
+	}
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleGetLastInteraction handles the get_last_interaction tool request.
+func (m *MCPServer) handleGetLastInteraction(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	jid, err := request.RequireString("jid")
+	if err != nil {
+		return mcp.NewToolResultError("jid parameter is required"), nil
+	}
+
+	msg, err := m.store.GetLastInteraction(jid)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to get last interaction: %v", err)), nil
+	}
+	if msg == nil {
+		return mcp.NewToolResultText(fmt.Sprintf("No interaction history found for '%s'", jid)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Last interaction with %s in chat '%s' (%s):\n\n",
+		jid, msg.ChatName, msg.ChatJID)
+	m.formatMessageItem(&result, *msg, false)
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleGetContactChats handles the get_contact_chats tool request.
+func (m *MCPServer) handleGetContactChats(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	jid, err := request.RequireString("jid")
+	if err != nil {
+		return mcp.NewToolResultError("jid parameter is required"), nil
+	}
+
+	limit := int(request.GetFloat("limit", 20.0))
+	if limit > 50 {
+		limit = 50
+	}
+
+	chats, err := m.store.GetContactChats(jid, limit)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to get contact chats: %v", err)), nil
+	}
+
+	var result strings.Builder
+	fmt.Fprintf(&result, "Found %d conversations involving '%s':\n\n", len(chats), jid)
+
+	for i, chat := range chats {
+		chatType := "DM"
+		if chat.IsGroup {
+			chatType = "Group"
+		}
+		displayName := getDisplayName(chat)
+		fmt.Fprintf(&result, "%d. [%s] %s\n", i+1, chatType, displayName)
+		fmt.Fprintf(&result, "   JID: %s\n", chat.JID)
+		if chat.ContactName != "" && chat.PushName != "" && chat.ContactName != chat.PushName {
+			fmt.Fprintf(&result, "   (Contact: %s, Push: %s)\n", chat.ContactName, chat.PushName)
+		}
+		fmt.Fprintf(&result, "   Last message: %s\n\n", m.formatDateTime(chat.LastMessageTime))
+	}
+
+	return mcp.NewToolResultText(result.String()), nil
+}
+
+// handleGetDirectChatByContact handles the get_direct_chat_by_contact tool request.
+func (m *MCPServer) handleGetDirectChatByContact(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	query, err := request.RequireString("query")
+	if err != nil {
+		return mcp.NewToolResultError("query parameter is required"), nil
+	}
+
+	chat, err := m.store.GetDirectChatByContact(query)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to find direct chat: %v", err)), nil
+	}
+	if chat == nil {
+		return mcp.NewToolResultText(fmt.Sprintf("No 1-on-1 direct chat found matching '%s'", query)), nil
+	}
+
+	displayName := getDisplayName(*chat)
+	var result strings.Builder
+	fmt.Fprintf(&result, "Direct Chat Found:\n")
+	fmt.Fprintf(&result, "   Name: %s\n", displayName)
+	fmt.Fprintf(&result, "   JID: %s\n", chat.JID)
+	if chat.ContactName != "" && chat.PushName != "" && chat.ContactName != chat.PushName {
+		fmt.Fprintf(&result, "   (Contact: %s, Push: %s)\n", chat.ContactName, chat.PushName)
+	}
+	fmt.Fprintf(&result, "   Last message: %s\n", m.formatDateTime(chat.LastMessageTime))
+
+	return mcp.NewToolResultText(result.String()), nil
+}

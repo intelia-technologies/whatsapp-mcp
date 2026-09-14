@@ -45,7 +45,7 @@ AI:  *reads context, sends reply* → "Sent! I've proposed Thursday at noon"
 
 This server implements the full MCP specification with:
 
-- **20 Tools** for WhatsApp operations
+- **25 Tools** for WhatsApp operations
 - **4 Prompts** for common workflows
 - **4 Resources** for interactive guides
 - **Server Instructions** for optimal AI interactions
@@ -64,6 +64,10 @@ This server implements the full MCP specification with:
 | `send_voice_note` | Send audio as a voice note | Transcodes MP3, M4A, WAV, OGG, and similar formats to Ogg/Opus |
 | `send_document` | Send documents | Custom filename and caption |
 | `send_reaction` | React to a message with an emoji | Native reaction on the bubble; empty emoji removes it |
+| `get_message_context` | Get surrounding message context | Target message plus N before and N after |
+| `get_last_interaction` | Get last message with a contact | Across all chats (DMs and groups) |
+| `get_contact_chats` | List all chats involving a contact | DMs and common groups |
+| `get_direct_chat_by_contact` | Find 1-on-1 direct chat for a contact | By phone or name (excludes groups) |
 | `download_media` | Retry media downloads | One message or a pending batch |
 | `load_more_messages` | Fetch older history | On-demand from servers |
 | `get_my_info` | Get your profile info | JID, name, status, picture |

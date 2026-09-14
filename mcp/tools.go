@@ -353,4 +353,63 @@ func (m *MCPServer) registerTools() {
 		),
 		m.handleDownloadMedia,
 	)
+
+	// ── Context and Interaction Tools ────────────────────────────────────
+
+	// get_message_context
+	m.server.AddTool(
+		mcp.NewTool("get_message_context",
+			mcp.WithDescription("Get conversational context around a specific message ID in its chat (messages before and after)."),
+			mcp.WithString("message_id",
+				mcp.Required(),
+				mcp.Description("target message ID (e.g. from search_messages or get_chat_messages)"),
+			),
+			mcp.WithNumber("before",
+				mcp.Description("number of messages before the target message (default: 5, max: 20)"),
+			),
+			mcp.WithNumber("after",
+				mcp.Description("number of messages after the target message (default: 5, max: 20)"),
+			),
+		),
+		m.handleGetMessageContext,
+	)
+
+	// get_last_interaction
+	m.server.AddTool(
+		mcp.NewTool("get_last_interaction",
+			mcp.WithDescription("Get the most recent message exchanged with a contact across all chats (DMs and groups)."),
+			mcp.WithString("jid",
+				mcp.Required(),
+				mcp.Description("contact JID or phone number (e.g. '34636513587@s.whatsapp.net' or '34636513587')"),
+			),
+		),
+		m.handleGetLastInteraction,
+	)
+
+	// get_contact_chats
+	m.server.AddTool(
+		mcp.NewTool("get_contact_chats",
+			mcp.WithDescription("List all conversations (DMs and groups) involving a specific contact, ordered by recent activity."),
+			mcp.WithString("jid",
+				mcp.Required(),
+				mcp.Description("contact JID or phone number"),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("maximum number of chats to return (default: 20, max: 50)"),
+			),
+		),
+		m.handleGetContactChats,
+	)
+
+	// get_direct_chat_by_contact
+	m.server.AddTool(
+		mcp.NewTool("get_direct_chat_by_contact",
+			mcp.WithDescription("Find the 1-on-1 direct chat (excluding groups) for a contact by phone number or name."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("phone number or contact name to search for"),
+			),
+		),
+		m.handleGetDirectChatByContact,
+	)
 }

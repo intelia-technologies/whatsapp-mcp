@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -584,4 +585,179 @@ func (s *MessageStore) scanMessagesWithNames(rows *sql.Rows) ([]MessageWithNames
 	}
 
 	return messages, rows.Err()
+}
+
+// MessageContext holds a target message and its surrounding conversational context.
+type MessageContext struct {
+	Target MessageWithNames
+	Before []MessageWithNames
+	After  []MessageWithNames
+}
+
+// GetMessageWithNamesByID retrieves a single message with names by its ID.
+func (s *MessageStore) GetMessageWithNamesByID(messageID string) (*MessageWithNames, error) {
+	query := `
+	SELECT id, chat_jid, sender_jid, sender_push_name, sender_contact_name, chat_name,
+	       text, timestamp, is_from_me, message_type,
+	       media_file_path, media_file_name, media_file_size, media_mime_type,
+	       media_width, media_height, media_duration, media_download_status,
+	       media_download_timestamp, media_download_error
+	FROM messages_with_names
+	WHERE id = ?
+	LIMIT 1
+	`
+	rows, err := s.db.Query(query, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	msgs, err := s.scanMessagesWithNames(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	return &msgs[0], nil
+}
+
+// GetMessageContext retrieves a target message along with N messages before and N messages after in the same chat.
+func (s *MessageStore) GetMessageContext(messageID string, before int, after int) (*MessageContext, error) {
+	target, err := s.GetMessageWithNamesByID(messageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get target message: %w", err)
+	}
+	if target == nil {
+		return nil, nil
+	}
+
+	if before < 0 {
+		before = 0
+	}
+	if before > 50 {
+		before = 50
+	}
+	if after < 0 {
+		after = 0
+	}
+	if after > 50 {
+		after = 50
+	}
+
+	msgCtx := &MessageContext{
+		Target: *target,
+	}
+
+	// Fetch messages before (timestamp < target.Timestamp, ordered DESC, then reversed to chronological)
+	if before > 0 {
+		queryBefore := `
+		SELECT id, chat_jid, sender_jid, sender_push_name, sender_contact_name, chat_name,
+		       text, timestamp, is_from_me, message_type,
+		       media_file_path, media_file_name, media_file_size, media_mime_type,
+		       media_width, media_height, media_duration, media_download_status,
+		       media_download_timestamp, media_download_error
+		FROM messages_with_names
+		WHERE chat_jid = ? AND timestamp < ?
+		ORDER BY timestamp DESC
+		LIMIT ?
+		`
+		rows, err := s.db.Query(queryBefore, target.ChatJID, target.Timestamp.Unix(), before)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get before messages: %w", err)
+		}
+		defer rows.Close()
+
+		beforeMsgs, err := s.scanMessagesWithNames(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan before messages: %w", err)
+		}
+		// reverse so they are ordered chronologically (oldest to newest)
+		for i, j := 0, len(beforeMsgs)-1; i < j; i, j = i+1, j-1 {
+			beforeMsgs[i], beforeMsgs[j] = beforeMsgs[j], beforeMsgs[i]
+		}
+		msgCtx.Before = beforeMsgs
+	}
+
+	// Fetch messages after (timestamp > target.Timestamp, ordered ASC)
+	if after > 0 {
+		queryAfter := `
+		SELECT id, chat_jid, sender_jid, sender_push_name, sender_contact_name, chat_name,
+		       text, timestamp, is_from_me, message_type,
+		       media_file_path, media_file_name, media_file_size, media_mime_type,
+		       media_width, media_height, media_duration, media_download_status,
+		       media_download_timestamp, media_download_error
+		FROM messages_with_names
+		WHERE chat_jid = ? AND timestamp > ?
+		ORDER BY timestamp ASC
+		LIMIT ?
+		`
+		rows, err := s.db.Query(queryAfter, target.ChatJID, target.Timestamp.Unix(), after)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get after messages: %w", err)
+		}
+		defer rows.Close()
+
+		afterMsgs, err := s.scanMessagesWithNames(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan after messages: %w", err)
+		}
+		msgCtx.After = afterMsgs
+	}
+
+	return msgCtx, nil
+}
+
+// GetLastInteraction retrieves the most recent message involving a specific contact (as sender or in direct chat).
+func (s *MessageStore) GetLastInteraction(jid string) (*MessageWithNames, error) {
+	searchJID := strings.TrimSpace(jid)
+	isPattern := !strings.Contains(searchJID, "@")
+
+	var query string
+	var args []any
+
+	if isPattern {
+		clean := strings.TrimPrefix(searchJID, "+")
+		pattern := "%" + clean + "%"
+		query = `
+		SELECT id, chat_jid, sender_jid, sender_push_name, sender_contact_name, chat_name,
+		       text, timestamp, is_from_me, message_type,
+		       media_file_path, media_file_name, media_file_size, media_mime_type,
+		       media_width, media_height, media_duration, media_download_status,
+		       media_download_timestamp, media_download_error
+		FROM messages_with_names
+		WHERE sender_jid LIKE ? OR (chat_jid LIKE ? AND chat_jid NOT LIKE '%@g.us')
+		ORDER BY timestamp DESC
+		LIMIT 1
+		`
+		args = []any{pattern, pattern}
+	} else {
+		query = `
+		SELECT id, chat_jid, sender_jid, sender_push_name, sender_contact_name, chat_name,
+		       text, timestamp, is_from_me, message_type,
+		       media_file_path, media_file_name, media_file_size, media_mime_type,
+		       media_width, media_height, media_duration, media_download_status,
+		       media_download_timestamp, media_download_error
+		FROM messages_with_names
+		WHERE sender_jid = ? OR chat_jid = ?
+		ORDER BY timestamp DESC
+		LIMIT 1
+		`
+		args = []any{searchJID, searchJID}
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	msgs, err := s.scanMessagesWithNames(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	return &msgs[0], nil
 }

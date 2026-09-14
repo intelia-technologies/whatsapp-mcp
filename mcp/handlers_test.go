@@ -29,3 +29,22 @@ func TestValidateReaction(t *testing.T) {
 		}
 	}
 }
+
+func TestContextAndInteractionToolsRegistered(t *testing.T) {
+	m := NewMCPServer(nil, nil, nil, nil)
+	srv := m.GetServer()
+
+	expectedTools := []string{
+		"get_message_context",
+		"get_last_interaction",
+		"get_contact_chats",
+		"get_direct_chat_by_contact",
+	}
+
+	for _, toolName := range expectedTools {
+		tool := srv.GetTool(toolName)
+		if tool == nil {
+			t.Errorf("expected tool %q to be registered, but was nil", toolName)
+		}
+	}
+}

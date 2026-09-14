@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -216,4 +217,104 @@ func (s *MessageStore) SearchChats(search string, limit int) ([]Chat, error) {
 	}
 
 	return chats, rows.Err()
+}
+
+// GetContactChats returns all distinct conversations (DMs and groups) involving a contact.
+func (s *MessageStore) GetContactChats(jid string, limit int) ([]Chat, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	searchJID := strings.TrimSpace(jid)
+	isPattern := !strings.Contains(searchJID, "@")
+
+	var query string
+	var args []any
+
+	if isPattern {
+		clean := strings.TrimPrefix(searchJID, "+")
+		pattern := "%" + clean + "%"
+		query = `
+		SELECT DISTINCT c.jid, COALESCE(c.push_name, ''), COALESCE(c.contact_name, ''), c.last_message_time, c.unread_count, c.is_group
+		FROM chats c
+		JOIN messages m ON c.jid = m.chat_jid
+		WHERE m.sender_jid LIKE ? OR c.jid LIKE ?
+		ORDER BY c.last_message_time DESC
+		LIMIT ?
+		`
+		args = []any{pattern, pattern, limit}
+	} else {
+		query = `
+		SELECT DISTINCT c.jid, COALESCE(c.push_name, ''), COALESCE(c.contact_name, ''), c.last_message_time, c.unread_count, c.is_group
+		FROM chats c
+		JOIN messages m ON c.jid = m.chat_jid
+		WHERE m.sender_jid = ? OR c.jid = ?
+		ORDER BY c.last_message_time DESC
+		LIMIT ?
+		`
+		args = []any{searchJID, searchJID, limit}
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chats []Chat
+	for rows.Next() {
+		var chat Chat
+		var lastMsgUnix int64
+		err := rows.Scan(
+			&chat.JID,
+			&chat.PushName,
+			&chat.ContactName,
+			&lastMsgUnix,
+			&chat.UnreadCount,
+			&chat.IsGroup,
+		)
+		if err != nil {
+			return nil, err
+		}
+		chat.LastMessageTime = time.Unix(lastMsgUnix, 0)
+		chats = append(chats, chat)
+	}
+	return chats, rows.Err()
+}
+
+// GetDirectChatByContact searches for a 1-on-1 direct chat by phone number or contact name (excluding groups).
+func (s *MessageStore) GetDirectChatByContact(queryStr string) (*Chat, error) {
+	clean := strings.TrimPrefix(strings.TrimSpace(queryStr), "+")
+	pattern := "%" + clean + "%"
+
+	query := `
+	SELECT jid, COALESCE(push_name, ''), COALESCE(contact_name, ''), last_message_time, unread_count, is_group
+	FROM chats
+	WHERE is_group = 0 AND (jid LIKE ? OR push_name LIKE ? OR contact_name LIKE ?)
+	ORDER BY last_message_time DESC
+	LIMIT 1
+	`
+	row := s.db.QueryRow(query, pattern, pattern, pattern)
+
+	var chat Chat
+	var lastMsgUnix int64
+	err := row.Scan(
+		&chat.JID,
+		&chat.PushName,
+		&chat.ContactName,
+		&lastMsgUnix,
+		&chat.UnreadCount,
+		&chat.IsGroup,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	chat.LastMessageTime = time.Unix(lastMsgUnix, 0)
+	return &chat, nil
 }
