@@ -155,12 +155,16 @@ graph TB
 
 ### Prerequisites
 
-- **Go 1.25.5+** (for local setup) or **Docker** (recommended)
+- **Go 1.25.5+** for the native runtime, or Docker for an isolated development runtime
 - **ffmpeg and ffprobe** (required for GIF and voice-note transcoding; included in the Docker image)
 - **WhatsApp account** (will be linked via QR code)
 - **MCP-compatible AI client** (Claude, Cursor, etc.)
 
-### Option 1: Docker Setup (Recommended)
+> **Run exactly one production runtime per WhatsApp account.** The native
+> launchd service owns `./data`. Docker is opt-in development infrastructure
+> with separate session and SQLite storage; it must never mount `./data`.
+
+### Option 1: Isolated Docker Development Runtime
 
 1. **Clone and configure**
    ```bash
@@ -170,15 +174,15 @@ graph TB
    # Edit .env with your settings (API key, timezone, etc.)
    ```
 
-2. **Start the server**
+2. **Start the isolated server explicitly**
    ```bash
-   docker compose up -d
+   docker compose --profile docker-dev up -d
    ```
 
 3. **Link WhatsApp**
    ```bash
    # View logs to see QR code
-   docker compose logs -f whatsapp-mcp
+   docker compose --profile docker-dev logs -f whatsapp-mcp
 
    # Scan QR code with WhatsApp mobile app:
    # Settings → Linked Devices → Link a Device
@@ -186,7 +190,7 @@ graph TB
 
 4. **Verify it's running**
    ```bash
-   curl http://localhost:8080/health
+   curl http://localhost:18081/health
    # Expected: "OK"
    ```
 

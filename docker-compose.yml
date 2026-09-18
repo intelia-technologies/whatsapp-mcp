@@ -1,9 +1,12 @@
 services:
   whatsapp-mcp:
+    # Docker is a deliberate, isolated development runtime. The native
+    # launchd service owns ./data in normal operation.
+    profiles: ["docker-dev"]
     build: .
-    container_name: whatsapp-mcp
+    container_name: whatsapp-mcp-docker-dev
     ports:
-      - '127.0.0.1:${MCP_PORT:-8080}:8080'
+      - '127.0.0.1:${WHATSAPP_MCP_DOCKER_PORT:-18081}:8080'
     environment:
       - MCP_API_KEY=${MCP_API_KEY}
       - MCP_PORT=8080
@@ -14,9 +17,9 @@ services:
       - MEDIA_AUTO_DOWNLOAD_MAX_SIZE_MB=${MEDIA_AUTO_DOWNLOAD_MAX_SIZE_MB:-10}
       - MEDIA_AUTO_DOWNLOAD_TYPES=${MEDIA_AUTO_DOWNLOAD_TYPES:-image,audio,sticker}
     volumes:
-      # persist WhatsApp session and message database
-      - ./data:/app/data
-    restart: unless-stopped
+      # Never share the native service's SQLite database, WAL, or auth session.
+      - ${WHATSAPP_MCP_DOCKER_DATA_DIR:-./data-docker}:/app/data
+    restart: "no"
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
       interval: 30s
